@@ -542,8 +542,20 @@ mod tests {
         ]"#;
         let msgs: Vec<PolygonOptionsMessage> = serde_json::from_str(json_data).unwrap();
         assert_eq!(msgs.len(), 2);
-        match &msgs[0] { PolygonOptionsMessage::Trade(t) => { assert_eq!(t.symbol, "AAPL240118C00180000"); assert_eq!(t.size as i64, 10); }, _ => panic!("expected trade") }
-        match &msgs[1] { PolygonOptionsMessage::Quote(q) => { assert_eq!(q.symbol, "AAPL240118C00180000"); assert!((q.bid_price-1.2).abs()<1e-9); }, _ => panic!("expected quote") }
+        match &msgs[0] {
+            PolygonOptionsMessage::Trade(t) => {
+                assert_eq!(t.symbol, "AAPL240118C00180000");
+                assert_eq!(t.size as i64, 10);
+            }
+            _ => panic!("expected trade"),
+        }
+        match &msgs[1] {
+            PolygonOptionsMessage::Quote(q) => {
+                assert_eq!(q.symbol, "AAPL240118C00180000");
+                assert!((q.bid_price - 1.2).abs() < 1e-9);
+            }
+            _ => panic!("expected quote"),
+        }
     }
 
     #[test]
@@ -554,7 +566,19 @@ mod tests {
         ]"#;
         let msgs: Vec<PolygonCryptoMessage> = serde_json::from_str(json_data).unwrap();
         assert_eq!(msgs.len(), 2);
-        match &msgs[0] { PolygonCryptoMessage::Trade(t) => { assert_eq!(t.symbol, "BTC-USD"); assert!((t.price-40000.5).abs()<1e-9); }, _ => panic!("expected trade") }
-        match &msgs[1] { PolygonCryptoMessage::Quote(q) => { assert_eq!(q.symbol, "BTC-USD"); assert_eq!(q.bid_price as i64, 40000); }, _ => panic!("expected quote") }
+        match &msgs[0] {
+            PolygonCryptoMessage::Trade(t) => {
+                assert_eq!(t.symbol, "BTC-USD");
+                assert!((t.price - 40000.5).abs() < 1e-9);
+            }
+            _ => panic!("expected trade"),
+        }
+        match &msgs[1] {
+            PolygonCryptoMessage::Quote(q) => {
+                assert_eq!(q.symbol, "BTC-USD");
+                assert_eq!(q.bid_price as i64, 40000);
+            }
+            _ => panic!("expected quote"),
+        }
     }
 }

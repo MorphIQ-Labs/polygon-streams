@@ -2,7 +2,7 @@ use serde_json::Value;
 
 #[derive(Debug, Clone)]
 pub struct NormalizedEvent {
-    pub ev: String,         // e.g., "T", "Q", "A", "AM", "status"
+    pub ev: String, // e.g., "T", "Q", "A", "AM", "status"
     pub symbol: Option<String>,
     pub ts: Option<i64>,
     pub payload: Value,
@@ -10,21 +10,26 @@ pub struct NormalizedEvent {
 
 pub trait ClusterHandler: Send + Sync {
     fn ws_url(&self) -> &str;
-    fn default_subscription(&self) -> &str { "T.*" }
-    fn normalize_messages(&self, text: &str) -> Result<Vec<NormalizedEvent>, Box<dyn std::error::Error>>;
+    fn default_subscription(&self) -> &str {
+        "T.*"
+    }
+    fn normalize_messages(
+        &self,
+        text: &str,
+    ) -> Result<Vec<NormalizedEvent>, Box<dyn std::error::Error>>;
 }
 
-mod stocks;
-mod futures;
-mod options;
 mod crypto;
+mod futures;
 mod generic;
+mod options;
+mod stocks;
 
-pub use stocks::StocksHandler;
-pub use futures::FuturesHandler;
-pub use options::OptionsHandler;
 pub use crypto::CryptoHandler;
-pub use generic::{GenericHandler, ClusterKind};
+pub use futures::FuturesHandler;
+pub use generic::{ClusterKind, GenericHandler};
+pub use options::OptionsHandler;
+pub use stocks::StocksHandler;
 
 pub fn build_handler(cluster: &str) -> Box<dyn ClusterHandler> {
     match cluster.to_ascii_lowercase().as_str() {
@@ -45,10 +50,22 @@ mod tests {
 
     #[test]
     fn ws_url_maps_correctly() {
-        assert_eq!(build_handler("stocks").ws_url(), "wss://socket.polygon.io/stocks");
-        assert_eq!(build_handler("futures").ws_url(), "wss://socket.polygon.io/futures");
-        assert_eq!(build_handler("options").ws_url(), "wss://socket.polygon.io/options");
-        assert_eq!(build_handler("crypto").ws_url(), "wss://socket.polygon.io/crypto");
+        assert_eq!(
+            build_handler("stocks").ws_url(),
+            "wss://socket.polygon.io/stocks"
+        );
+        assert_eq!(
+            build_handler("futures").ws_url(),
+            "wss://socket.polygon.io/futures"
+        );
+        assert_eq!(
+            build_handler("options").ws_url(),
+            "wss://socket.polygon.io/options"
+        );
+        assert_eq!(
+            build_handler("crypto").ws_url(),
+            "wss://socket.polygon.io/crypto"
+        );
     }
 
     #[test]
