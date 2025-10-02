@@ -716,6 +716,9 @@ fn process_message(
                 }
                 _ => {}
             }
+
+            let symbol = ev.symbol.as_deref().unwrap_or("");
+
             // Detailed event logging (guarded to avoid expensive operations when disabled)
             if tracing::event_enabled!(target: "polygon_events", tracing::Level::DEBUG) {
                 buf.clear();
@@ -728,7 +731,7 @@ fn process_message(
                 if let Ok(payload_json) = serde_json::to_string(&ev.payload) {
                     buf.extend_from_slice(payload_json.as_bytes());
                     if let Ok(line) = std::str::from_utf8(&buf) {
-                        debug!(target: "polygon_events", r#type = %ev.ev, symbol = %ev.symbol.as_deref().unwrap_or(""), ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
+                        debug!(target: "polygon_events", r#type = %ev.ev, symbol = %symbol, ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
                     }
                 }
             }
@@ -752,16 +755,15 @@ fn process_message(
                 // Include filters
                 if let Some(ref pats) = ndjson_bp.include {
                     let kind = ev.ev.chars().next().unwrap_or('*');
-                    let sym = ev.symbol.as_deref().unwrap_or("");
                     let mut matched = false;
                     for p in pats.iter() {
                         if p.kind == kind || p.kind == '*' {
                             if p.wildcard {
-                                if sym.starts_with(&p.prefix) {
+                                if symbol.starts_with(&p.prefix) {
                                     matched = true;
                                     break;
                                 }
-                            } else if sym == p.prefix {
+                            } else if symbol == p.prefix {
                                 matched = true;
                                 break;
                             }
@@ -774,7 +776,7 @@ fn process_message(
                 ndjson_bp.seq_counter = ndjson_bp.seq_counter.saturating_add(1);
                 let ev_out = make_ndjson_event(
                     &ev.ev,
-                    ev.symbol.as_deref().unwrap_or(""),
+                    symbol,
                     ev.ts.unwrap_or(0),
                     ev.payload,
                     metrics,

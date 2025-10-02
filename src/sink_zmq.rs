@@ -90,7 +90,12 @@ pub fn spawn_zmq_publisher(
                             // Multipart: [topic, payload]
                             // Build topic directly as bytes to avoid intermediate String
                             topic_buf.clear();
-                            let need = topic_prefix.len() + ev.r#type.len() + if ev.symbol.is_empty() { 0 } else { 1 + ev.symbol.len() };
+                            let symbol_overhead = if ev.symbol.is_empty() {
+                                0
+                            } else {
+                                1 + ev.symbol.len() // ':' separator + symbol
+                            };
+                            let need = topic_prefix.len() + ev.r#type.len() + symbol_overhead;
                             if topic_buf.capacity() < need {
                                 topic_buf.reserve(need - topic_buf.capacity());
                             }
