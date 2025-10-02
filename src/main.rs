@@ -621,16 +621,20 @@ fn process_message(
                 "Q" => { metrics.inc_quote(); }
                 _ => {}
             }
-            // Build normalized line prefix
-            buf.clear();
-            buf.extend_from_slice(ev.ev.as_bytes());
-            buf.push(b':');
-            if let Some(sym) = &ev.symbol { buf.extend_from_slice(sym.as_bytes()); }
-            buf.push(b' ');
-            let payload_json = serde_json::to_string(&ev.payload)?;
-            buf.extend_from_slice(payload_json.as_bytes());
-            let line = std::str::from_utf8(&buf)?;
-            info!(target: "polygon_events", r#type = %ev.ev, symbol = %ev.symbol.as_deref().unwrap_or(""), ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
+            // Detailed event logging (guarded to avoid expensive operations when disabled)
+            if tracing::event_enabled!(target: "polygon_events", tracing::Level::DEBUG) {
+                buf.clear();
+                buf.extend_from_slice(ev.ev.as_bytes());
+                buf.push(b':');
+                if let Some(sym) = &ev.symbol { buf.extend_from_slice(sym.as_bytes()); }
+                buf.push(b' ');
+                if let Ok(payload_json) = serde_json::to_string(&ev.payload) {
+                    buf.extend_from_slice(payload_json.as_bytes());
+                    if let Ok(line) = std::str::from_utf8(&buf) {
+                        debug!(target: "polygon_events", r#type = %ev.ev, symbol = %ev.symbol.as_deref().unwrap_or(""), ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
+                    }
+                }
+            }
 
             // NDJSON emission
             let choose_tx = match ev.ev.as_str() { "T" => ndjson_trades_tx.or(ndjson_tx), "Q" => ndjson_quotes_tx.or(ndjson_tx), _ => ndjson_tx };
