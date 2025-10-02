@@ -26,6 +26,7 @@ mod config;
 mod metrics;
 mod ndjson;
 mod cluster;
+mod sink_zmq;
 
 // env-only helpers are defined in config.rs
 
@@ -83,16 +84,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build cluster handler
     let handler: Arc<dyn ClusterHandler> = cluster::build_handler(&cfg.cluster).into();
 
-    // Optional NDJSON emitter
+    // Sink selection: stdout | ndjson | zmq
+    let sink_kind = cfg.sink.to_ascii_lowercase();
+
     // Apply conservative defaults for rotation if writing to file and not explicitly set
-    if cfg.emit_ndjson && cfg.ndjson_dest.to_ascii_lowercase() != "stdout" && cfg.ndjson_max_bytes.is_none() && cfg.ndjson_rotate_secs.is_none() {
-        // Default to 100MB segments when writing to file
+    if (sink_kind == "ndjson" || sink_kind == "stdout")
+        && cfg.ndjson_dest.to_ascii_lowercase() != "stdout"
+        && cfg.ndjson_max_bytes.is_none()
+        && cfg.ndjson_rotate_secs.is_none()
+    {
         cfg.ndjson_max_bytes = Some(100 * 1024 * 1024);
     }
 
-    let (ndjson_tx_opt, ndjson_trades_tx_opt, ndjson_quotes_tx_opt) = if cfg.emit_ndjson {
-        if cfg.ndjson_split_per_type && cfg.ndjson_dest.to_ascii_lowercase() != "stdout" {
-            let (trades_path, quotes_path) = derive_split_paths(&cfg.ndjson_dest);
+    let (ndjson_tx_opt, ndjson_trades_tx_opt, ndjson_quotes_tx_opt) = if sink_kind == "ndjson" || sink_kind == "stdout" {
+        // For stdout, force stdout destination
+        let dest_override = if sink_kind == "stdout" { Some("stdout".to_string()) } else { None };
+        let ndjson_dest = dest_override.as_deref().unwrap_or(&cfg.ndjson_dest);
+
+        if cfg.ndjson_split_per_type && ndjson_dest.to_ascii_lowercase() != "stdout" {
+            let (trades_path, quotes_path) = derive_split_paths(ndjson_dest);
             let (tx_t, rx_t) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
             let (tx_q, rx_q) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
             let handle_t = spawn_ndjson_writer(
@@ -125,10 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             (None, Some(tx_t), Some(tx_q))
         } else {
             let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
-            let dest = NdjsonDest::from_str(&cfg.ndjson_dest);
             let handle = spawn_ndjson_writer(
                 rx_ev,
-                dest,
+                NdjsonDest::from_str(ndjson_dest),
                 metrics.clone(),
                 cfg.ndjson_warn_interval,
                 cfg.ndjson_max_bytes,
@@ -142,7 +151,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = handle;
             (Some(tx_ev), None, None)
         }
-    } else { (None, None, None) };
+    } else if sink_kind == "zmq" {
+        let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.zmq_channel_cap);
+        let _handle = sink_zmq::spawn_zmq_publisher(
+            rx_ev,
+            cfg.zmq_endpoint.clone(),
+            cfg.zmq_bind,
+            cfg.zmq_snd_hwm,
+            cfg.zmq_topic_prefix.clone(),
+            cfg.zmq_warn_interval,
+            metrics.clone(),
+            notify_shutdown.clone(),
+        );
+        (Some(tx_ev), None, None)
+    } else {
+        (None, None, None)
+    };
 
     // Spawn a task to process incoming messages
     // Compile include patterns for NDJSON if provided
@@ -154,7 +178,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ndjson_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_trades_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_quotes_tx_opt.as_ref().map(|tx| tx.clone()),
-        cfg.ndjson_warn_interval,
+        if sink_kind == "zmq" { cfg.zmq_warn_interval } else { cfg.ndjson_warn_interval },
+        sink_kind == "zmq",
         include_patterns,
         cfg.ndjson_sample_quotes.max(1),
         host.clone(),
@@ -355,6 +380,7 @@ struct NdjsonBp {
     sample_quotes_n: u64,
     quotes_counter: u64,
     seq_counter: u64,
+    is_zmq_sink: bool,
 }
 
 fn spawn_message_processor(
@@ -365,13 +391,14 @@ fn spawn_message_processor(
     ndjson_trades_tx: Option<Sender<NdjsonEvent>>,
     ndjson_quotes_tx: Option<Sender<NdjsonEvent>>,
     ndjson_warn_interval: Duration,
+    is_zmq_sink: bool,
     include_patterns: Option<Vec<IncludePattern>>,
     sample_quotes_n: u64,
     host: Arc<String>,
     handler: Arc<dyn ClusterHandler>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ndjson_bp = NdjsonBp { last_warn: Instant::now() - ndjson_warn_interval, dropped_since_warn: 0, warn_interval: ndjson_warn_interval, include: include_patterns, sample_quotes_n, quotes_counter: 0, seq_counter: 0 };
+        let mut ndjson_bp = NdjsonBp { last_warn: Instant::now() - ndjson_warn_interval, dropped_since_warn: 0, warn_interval: ndjson_warn_interval, include: include_patterns, sample_quotes_n, quotes_counter: 0, seq_counter: 0, is_zmq_sink };
         loop {
             tokio::select! {
                 maybe = rx.recv() => {
@@ -573,7 +600,18 @@ fn process_message(
                 };
                 match tx.try_send(ev_out) {
                     Ok(()) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => { metrics.inc_ndjson_drop(); ndjson_bp.dropped_since_warn = ndjson_bp.dropped_since_warn.saturating_add(1); if ndjson_bp.last_warn.elapsed() >= ndjson_bp.warn_interval { warn!(target: "polygon_ndjson", dropped = ndjson_bp.dropped_since_warn, interval_secs = ndjson_bp.warn_interval.as_secs(), "ndjson_backpressure"); ndjson_bp.dropped_since_warn = 0; ndjson_bp.last_warn = Instant::now(); } }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        if ndjson_bp.is_zmq_sink { metrics.inc_zmq_drop(); } else { metrics.inc_ndjson_drop(); }
+                        ndjson_bp.dropped_since_warn = ndjson_bp.dropped_since_warn.saturating_add(1);
+                        if ndjson_bp.last_warn.elapsed() >= ndjson_bp.warn_interval {
+                            if ndjson_bp.is_zmq_sink {
+                                warn!(target: "polygon_sink", dropped = ndjson_bp.dropped_since_warn, interval_secs = ndjson_bp.warn_interval.as_secs(), "zmq_backpressure");
+                            } else {
+                                warn!(target: "polygon_ndjson", dropped = ndjson_bp.dropped_since_warn, interval_secs = ndjson_bp.warn_interval.as_secs(), "ndjson_backpressure");
+                            }
+                            ndjson_bp.dropped_since_warn = 0; ndjson_bp.last_warn = Instant::now();
+                        }
+                    }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => { metrics.inc_error(); }
                 }
             }

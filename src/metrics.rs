@@ -22,6 +22,8 @@ pub struct Metrics {
     ndjson_drops_total: Arc<AtomicU64>,
     ndjson_written_total: Arc<AtomicU64>,
     channel_drops_total: Arc<AtomicU64>,
+    zmq_drops_total: Arc<AtomicU64>,
+    zmq_sent_total: Arc<AtomicU64>,
     ready: Arc<AtomicBool>,
     feed: String,
     topic: String,
@@ -45,6 +47,8 @@ impl Metrics {
             ndjson_drops_total: Arc::new(AtomicU64::new(0)),
             ndjson_written_total: Arc::new(AtomicU64::new(0)),
             channel_drops_total: Arc::new(AtomicU64::new(0)),
+            zmq_drops_total: Arc::new(AtomicU64::new(0)),
+            zmq_sent_total: Arc::new(AtomicU64::new(0)),
             ready: Arc::new(AtomicBool::new(false)),
             feed,
             topic,
@@ -66,6 +70,8 @@ impl Metrics {
     pub fn inc_drop(&self) { self.channel_drops_total.fetch_add(1, Ordering::Relaxed); }
     pub fn inc_ndjson_drop(&self) { self.ndjson_drops_total.fetch_add(1, Ordering::Relaxed); }
     pub fn inc_ndjson_written(&self) { self.ndjson_written_total.fetch_add(1, Ordering::Relaxed); }
+    pub fn inc_zmq_drop(&self) { self.zmq_drops_total.fetch_add(1, Ordering::Relaxed); }
+    pub fn inc_zmq_sent(&self) { self.zmq_sent_total.fetch_add(1, Ordering::Relaxed); }
     pub fn set_ready(&self, v: bool) { self.ready.store(v, Ordering::Relaxed); }
     pub fn is_ready(&self) -> bool { self.ready.load(Ordering::Relaxed) }
 
@@ -131,6 +137,14 @@ impl Metrics {
         let _ = writeln!(&mut s, "# HELP polygon_ndjson_written_total NDJSON messages written");
         let _ = writeln!(&mut s, "# TYPE polygon_ndjson_written_total counter");
         let _ = writeln!(&mut s, "polygon_ndjson_written_total{{{}}} {}", labels, self.ndjson_written_total.load(Ordering::Relaxed));
+
+        let _ = writeln!(&mut s, "# HELP polygon_zmq_drops_total ZMQ send drops due to backpressure");
+        let _ = writeln!(&mut s, "# TYPE polygon_zmq_drops_total counter");
+        let _ = writeln!(&mut s, "polygon_zmq_drops_total{{{}}} {}", labels, self.zmq_drops_total.load(Ordering::Relaxed));
+
+        let _ = writeln!(&mut s, "# HELP polygon_zmq_sent_total ZMQ messages sent successfully");
+        let _ = writeln!(&mut s, "# TYPE polygon_zmq_sent_total counter");
+        let _ = writeln!(&mut s, "polygon_zmq_sent_total{{{}}} {}", labels, self.zmq_sent_total.load(Ordering::Relaxed));
 
         // Histograms
         self.reconnect_hist_success.render("polygon_reconnect_duration_seconds", &labels, &mut s);

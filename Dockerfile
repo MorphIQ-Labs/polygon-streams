@@ -9,14 +9,22 @@ ENV CARGO_PROFILE_RELEASE_LTO=true \
     CARGO_PROFILE_RELEASE_OPT_LEVEL=z \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
     CARGO_PROFILE_RELEASE_STRIP=symbols
-RUN cargo build --release
+ARG ENABLE_ZMQ_SINK=0
+RUN if [ "$ENABLE_ZMQ_SINK" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends libzmq3-dev && \
+      cargo build --release --features zmq-sink; \
+    else \
+      cargo build --release; \
+    fi
 
 # Final runtime stage
 FROM debian:bookworm-slim AS runtime
 # Install required runtime dependencies (OpenSSL runtime only)
+ARG ENABLE_ZMQ_SINK=0
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 \
     ca-certificates \
+    $(if [ "$ENABLE_ZMQ_SINK" = "1" ]; then echo libzmq5; fi) \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binary

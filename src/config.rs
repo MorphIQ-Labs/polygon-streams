@@ -1,6 +1,7 @@
 use std::{env, time::Duration};
 
 pub struct Config {
+    pub sink: String,
     pub cluster: String,
     pub api_key: String,
     pub subscription: String,
@@ -16,6 +17,7 @@ pub struct Config {
     pub interarrival_buckets: Vec<f64>,
     pub bp_warn_interval: Duration,
     pub stats_interval: Duration,
+    #[allow(dead_code)]
     pub emit_ndjson: bool,
     pub ndjson_dest: String,
     pub ndjson_channel_cap: usize,
@@ -29,6 +31,14 @@ pub struct Config {
     pub ndjson_include: Option<Vec<String>>, 
     pub ndjson_sample_quotes: u64,
     pub ndjson_split_per_type: bool,
+
+    // ZMQ sink configuration
+    pub zmq_endpoint: String,
+    pub zmq_bind: bool,
+    pub zmq_channel_cap: usize,
+    pub zmq_warn_interval: Duration,
+    pub zmq_snd_hwm: Option<i32>,
+    pub zmq_topic_prefix: String,
 }
 
 impl Config {
@@ -89,7 +99,13 @@ impl Config {
             .map(Duration::from_secs)
             .unwrap_or_else(|| Duration::from_secs(60));
 
+        let sink = env::var("SINK").unwrap_or_else(|_| {
+            // Back-compat: if EMIT_NDJSON=true, prefer ndjson; else stdout
+            if parse_bool(env::var("EMIT_NDJSON").ok().as_deref()) { "ndjson".to_string() } else { "stdout".to_string() }
+        });
+
         Ok(Config {
+            sink,
             api_key,
             cluster,
             subscription,
@@ -121,6 +137,14 @@ impl Config {
             }),
             ndjson_sample_quotes: env::var("NDJSON_SAMPLE_QUOTES").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(1),
             ndjson_split_per_type: parse_bool(env::var("NDJSON_SPLIT_PER_TYPE").ok().as_deref()),
+
+            // ZMQ sink
+            zmq_endpoint: env::var("ZMQ_ENDPOINT").unwrap_or_else(|_| "tcp://127.0.0.1:5556".to_string()),
+            zmq_bind: parse_bool(env::var("ZMQ_BIND").ok().as_deref()),
+            zmq_channel_cap: env::var("ZMQ_CHANNEL_CAP").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(4096),
+            zmq_warn_interval: env::var("ZMQ_WARN_INTERVAL_SECS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs).unwrap_or_else(|| Duration::from_secs(5)),
+            zmq_snd_hwm: env::var("ZMQ_SND_HWM").ok().and_then(|v| v.parse::<i32>().ok()),
+            zmq_topic_prefix: env::var("ZMQ_TOPIC_PREFIX").unwrap_or_else(|_| "".to_string()),
         })
     }
 }

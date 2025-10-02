@@ -17,7 +17,8 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
 | `METRICS_ADDR` | `127.0.0.1:9898` | Exposes `/metrics`, `/health`, `/ready` |
 | `STATS_INTERVAL_SECS` | `60` | Periodic stats log interval |
 | `BP_WARN_INTERVAL_SECS` | `5` | Backpressure warning interval |
-| `EMIT_NDJSON` | `false` | Emit NDJSON event stream |
+| `SINK` | `stdout` | One of: `stdout`, `ndjson`, `zmq` |
+| `EMIT_NDJSON` | `false` | Legacy toggle; if `SINK` unset and this is `true`, selects `ndjson` |
 | `NDJSON_DEST` | `stdout` | `stdout` or file path |
 | `NDJSON_CHANNEL_CAP` | `2048` | NDJSON pipeline channel capacity |
 | `NDJSON_WARN_INTERVAL_SECS` | `5` | NDJSON backpressure warn interval |
@@ -30,6 +31,12 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
 | `NDJSON_INCLUDE` | none | Comma patterns (e.g., `T:ES*,Q:ES*`) |
 | `NDJSON_SAMPLE_QUOTES` | `1` | Emit 1 in N quotes |
 | `NDJSON_SPLIT_PER_TYPE` | `false` | Split NDJSON files by type |
+| `ZMQ_ENDPOINT` | `tcp://127.0.0.1:5556` | ZMQ PUB endpoint (connect or bind) |
+| `ZMQ_BIND` | `false` | When `true`, bind instead of connect |
+| `ZMQ_CHANNEL_CAP` | `4096` | Internal channel capacity for ZMQ sink |
+| `ZMQ_WARN_INTERVAL_SECS` | `5` | Backpressure warn interval for ZMQ |
+| `ZMQ_SND_HWM` | unset | Optional zmq `SNDHWM` (messages) |
+| `ZMQ_TOPIC_PREFIX` | empty | Optional topic prefix for PUB topic |
 | `READY_MIN_MESSAGES` | `1` | Messages required before `/ready` returns READY |
 | `READY_DELAY_MS` | `0` | Additional delay before READY (milliseconds) |
 
@@ -57,6 +64,11 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
    git clone [repository-url]
    cd polygon-streams
    cargo build --release
+   # ZMQ sink requires libzmq and feature flag:
+   # macOS (brew):   brew install zeromq
+   # Debian/Ubuntu:  sudo apt-get install -y libzmq3-dev
+   # RHEL/CentOS:    sudo yum install -y zeromq-devel
+   # Then build with: cargo build --release --features zmq-sink
    ```
 
 ## Configuration
@@ -109,10 +121,17 @@ RUST_LOG=info cargo run --release
 ```
 
 Examples
-- Use stocks cluster with default subscription (T.*):
-  - `export POLYGON_CLUSTER=stocks && RUST_LOG=warn,polygon_events=info cargo run --release`
-- Use crypto cluster and explicit subscription:
-  - `export POLYGON_CLUSTER=crypto && export SUBSCRIPTION='T:BTC*' && RUST_LOG=warn,polygon_events=info cargo run --release`
+- Stdout sink (default) with stocks cluster:
+  - `export POLYGON_CLUSTER=stocks && SINK=stdout RUST_LOG=warn,polygon_events=info cargo run --release`
+- NDJSON to file with futures cluster:
+  - `export POLYGON_CLUSTER=futures && SINK=ndjson NDJSON_DEST=/var/log/polygon.ndjson RUST_LOG=warn cargo run --release`
+- NDJSON to stdout (pipe to jq):
+  - `SINK=ndjson NDJSON_DEST=stdout RUST_LOG=warn cargo run --release | jq -c .`
+- ZMQ PUB sink (requires feature build):
+  - `cargo run --release --features zmq-sink` with `SINK=zmq ZMQ_ENDPOINT=tcp://127.0.0.1:5556`
+  - Subscriber examples:
+    - Rust: `cargo run --release --features zmq-sink --example zmq_sub`
+    - Python: `pip install pyzmq && ZMQ_SUB_ENDPOINT=tcp://127.0.0.1:5556 python3 examples/zmq_sub.py`
 
 ## Output Format
 
@@ -135,12 +154,27 @@ Log filtering tips
   - `RUST_LOG=warn,polygon_events=info,polygon_stats=info`
 
 NDJSON stream
-- When enabled, each event is emitted as one JSON line with fields: `ingest_ts`, `type`, `symbol`, `topic`, `feed`, `ts`, `payload` (object), `hostname`, `app_version`, `schema_version`, and `seq`.
-- Example: `EMIT_NDJSON=true NDJSON_DEST=stdout RUST_LOG=warn cargo run --release | head -n1 | jq .`
+- Enable with `SINK=ndjson`.
+- Each event is emitted as one JSON line with fields: `ingest_ts`, `type`, `symbol`, `topic`, `feed`, `ts`, `payload` (object), `hostname`, `app_version`, `schema_version`, and `seq`.
+- Example: `SINK=ndjson NDJSON_DEST=stdout RUST_LOG=warn cargo run --release | head -n1 | jq .`
 
 Filtering and sampling (env only)
 - Include only specific symbols/types in NDJSON via comma-separated patterns (supports `*` suffix wildcard): `NDJSON_INCLUDE='T:ES*,Q:ES*'`
 - Sample quotes to reduce volume (emit 1 in N): `NDJSON_SAMPLE_QUOTES=10`
+
+ZMQ PUB sink
+- Build with feature: `cargo run --release --features zmq-sink`
+- Configure:
+  - `SINK=zmq`
+  - `ZMQ_ENDPOINT=tcp://127.0.0.1:5556` and optionally `ZMQ_BIND=true`
+  - Optional `ZMQ_SND_HWM` to set ZeroMQ high water mark and `ZMQ_TOPIC_PREFIX` to prefix topics.
+- Messages are sent as multipart `[topic, payload]` where:
+  - `topic` = `"T:SYMBOL"` or `"Q:SYMBOL"` (with optional `ZMQ_TOPIC_PREFIX`)
+  - `payload` = NDJSON event (same schema as file/stdout)
+ - Monitor metrics: `polygon_zmq_sent_total` (sent) and `polygon_zmq_drops_total` (dropped due to backpressure).
+
+Docker with ZMQ feature
+- Build with ZeroMQ enabled: `docker build --build-arg ENABLE_ZMQ_SINK=1 -t polygon-rs:zmq .`
 
 ## Effective Config
 
