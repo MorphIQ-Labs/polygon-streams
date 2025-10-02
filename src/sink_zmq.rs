@@ -65,7 +65,14 @@ pub fn spawn_zmq_publisher(
                             } else {
                                 format!("{}{}:{}", topic_prefix, ev.r#type, ev.symbol)
                             };
-                            let payload = match to_vec(&ev) { Ok(mut v) => { v.push(b'\n'); v }, Err(_) => { continue; } };
+                            let payload = match to_vec(&ev) {
+                                Ok(mut v) => { v.push(b'\n'); v },
+                                Err(e) => {
+                                    metrics.inc_error();
+                                    warn!(target: "polygon_sink", error = %e, "zmq_serialize_error");
+                                    continue;
+                                }
+                            };
                             // Non-blocking send; drop on EAGAIN
                             match socket.send_multipart(&[topic.as_bytes(), &payload], DONTWAIT) {
                                 Ok(()) => { metrics.inc_zmq_sent(); }
