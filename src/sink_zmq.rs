@@ -92,7 +92,7 @@ pub fn spawn_zmq_publisher(
                             // Build topic directly as bytes to avoid intermediate String
                             topic_buf.clear();
                             let need = topic_prefix.len() + ev.r#type.len() + if ev.symbol.is_empty() { 0 } else { 1 + ev.symbol.len() };
-                            topic_buf.reserve(need.saturating_sub(topic_buf.capacity()));
+                            topic_buf.reserve(need);
                             topic_buf.extend_from_slice(topic_prefix.as_bytes());
                             topic_buf.extend_from_slice(ev.r#type.as_bytes());
                             if !ev.symbol.is_empty() { topic_buf.push(b':'); topic_buf.extend_from_slice(ev.symbol.as_bytes()); }
