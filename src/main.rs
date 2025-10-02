@@ -420,7 +420,8 @@ fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
         } else {
             warn!(target: "polygon_ndjson", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "ndjson_backpressure");
         }
-        bp.dropped_since_warn = 0; bp.last_warn = Instant::now();
+        bp.dropped_since_warn = 0;
+        bp.last_warn = Instant::now();
     }
 }
 
