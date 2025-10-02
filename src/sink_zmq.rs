@@ -95,7 +95,10 @@ pub fn spawn_zmq_publisher(
                             topic_buf.reserve(need);
                             topic_buf.extend_from_slice(topic_prefix.as_bytes());
                             topic_buf.extend_from_slice(ev.r#type.as_bytes());
-                            if !ev.symbol.is_empty() { topic_buf.push(b':'); topic_buf.extend_from_slice(ev.symbol.as_bytes()); }
+                            if !ev.symbol.is_empty() {
+                                topic_buf.push(b':');
+                                topic_buf.extend_from_slice(ev.symbol.as_bytes());
+                            }
                             let payload = match to_vec(&ev) {
                                 Ok(mut v) => { v.push(b'\n'); v },
                                 Err(e) => {

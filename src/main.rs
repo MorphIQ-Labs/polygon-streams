@@ -630,7 +630,7 @@ fn process_message(
             let payload_json = serde_json::to_string(&ev.payload)?;
             buf.extend_from_slice(payload_json.as_bytes());
             let line = std::str::from_utf8(&buf)?;
-            info!(target: "polygon_events", r#type = %ev.ev, symbol = %ev.symbol.clone().unwrap_or_default(), ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
+            info!(target: "polygon_events", r#type = %ev.ev, symbol = %ev.symbol.as_deref().unwrap_or(""), ts = ev.ts.unwrap_or(0), payload = %payload_json, line = %line);
 
             // NDJSON emission
             let choose_tx = match ev.ev.as_str() { "T" => ndjson_trades_tx.or(ndjson_tx), "Q" => ndjson_quotes_tx.or(ndjson_tx), _ => ndjson_tx };
@@ -640,7 +640,7 @@ fn process_message(
                 // Include filters
                 if let Some(ref pats) = ndjson_bp.include {
                     let kind = ev.ev.chars().next().unwrap_or('*');
-                    let sym = ev.symbol.clone().unwrap_or_default();
+                    let sym = ev.symbol.as_deref().unwrap_or("");
                     let mut matched = false;
                     for p in pats.iter() {
                         if p.kind == kind || p.kind == '*' {
@@ -652,7 +652,7 @@ fn process_message(
                 ndjson_bp.seq_counter = ndjson_bp.seq_counter.saturating_add(1);
                 let ev_out = make_ndjson_event(
                     &ev.ev,
-                    &ev.symbol.clone().unwrap_or_default(),
+                    ev.symbol.as_deref().unwrap_or(""),
                     ev.ts.unwrap_or(0),
                     ev.payload.clone(),
                     metrics,
