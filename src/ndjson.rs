@@ -6,6 +6,7 @@ use tokio::sync::Notify;
 use tracing::{warn, error};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::path::Path;
+use std::borrow::Cow;
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use flate2::write::GzEncoder;
@@ -17,7 +18,7 @@ use crate::metrics::Metrics;
 #[derive(Serialize)]
 pub struct NdjsonEvent {
     pub ingest_ts: i64,
-    pub r#type: String,
+    pub r#type: Cow<'static, str>,
     pub symbol: String,
     pub topic: String,
     pub feed: String,
@@ -27,6 +28,17 @@ pub struct NdjsonEvent {
     pub app_version: &'static str,
     pub schema_version: u8,
     pub seq: u64,
+}
+
+pub fn intern_event_type(typ: &str) -> Cow<'static, str> {
+    match typ {
+        "T" => Cow::Borrowed("T"),
+        "Q" => Cow::Borrowed("Q"),
+        "A" => Cow::Borrowed("A"),
+        "AM" => Cow::Borrowed("AM"),
+        "status" => Cow::Borrowed("status"),
+        _ => Cow::Owned(typ.to_string()),
+    }
 }
 
 pub enum NdjsonDest {

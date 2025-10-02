@@ -435,7 +435,7 @@ fn make_ndjson_event(
 ) -> NdjsonEvent {
     NdjsonEvent {
         ingest_ts: now_millis(),
-        r#type: typ.to_string(),
+        r#type: ndjson::intern_event_type(typ),
         symbol: symbol.to_string(),
         topic: metrics.topic().to_string(),
         feed: metrics.feed().to_string(),
@@ -654,7 +654,7 @@ fn process_message(
                     &ev.ev,
                     ev.symbol.as_deref().unwrap_or(""),
                     ev.ts.unwrap_or(0),
-                    ev.payload.clone(),
+                    ev.payload,
                     metrics,
                     host,
                     ndjson_bp.seq_counter,
