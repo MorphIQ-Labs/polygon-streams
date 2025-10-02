@@ -175,6 +175,10 @@ ZMQ PUB sink
 
 Docker with ZMQ feature
 - Build with ZeroMQ enabled: `docker build --build-arg ENABLE_ZMQ_SINK=1 -t polygon-rs:zmq .`
+ - Image tags when using GHCR CI:
+   - Default: `ghcr.io/OWNER/REPO:latest`
+   - ZMQ-enabled: `ghcr.io/OWNER/REPO:zmq` and `ghcr.io/OWNER/REPO:latest-zmq`
+ - Local convenience tag added: `polygon-rs:latest-zmq`
 
 ## Effective Config
 

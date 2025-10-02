@@ -44,13 +44,9 @@ pub fn spawn_zmq_publisher(
             }
             Err(e) => {
                 error!(target: "polygon_sink", error = %e, endpoint = %endpoint, bind = bind, "zmq_socket_error");
-                // Drain until shutdown so we don't stall tasks
-                loop {
-                    tokio::select! {
-                        _ = notify_shutdown.notified() => break,
-                        _ = rx.recv() => {}
-                    }
-                }
+                // Drop receiver to avoid backpressure and exit this task.
+                // Upstream senders will observe a closed channel and account errors.
+                drop(rx);
                 return;
             }
         };
@@ -76,12 +72,8 @@ pub fn spawn_zmq_publisher(
                             match socket.send_multipart(&[topic.as_bytes(), &payload], DONTWAIT) {
                                 Ok(()) => { metrics.inc_zmq_sent(); }
                                 Err(e) => {
-                                    // Drop on backpressure
-                                    let again = e
-                                        .as_errno()
-                                        .map(|eno| eno == zmq::errno::EAGAIN)
-                                        .unwrap_or(false);
-                                    if again {
+                                    // Drop on backpressure (EAGAIN)
+                                    if matches!(e, zmq::Error::EAGAIN) {
                                         drops_since_warn = drops_since_warn.saturating_add(1);
                                         metrics.inc_zmq_drop();
                                         if last_warn.elapsed() >= warn_interval {
