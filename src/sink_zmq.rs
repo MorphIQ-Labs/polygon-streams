@@ -114,7 +114,8 @@ pub fn spawn_zmq_publisher(
                                         metrics.inc_zmq_drop();
                                         if last_warn.elapsed() >= warn_interval {
                                             warn!(target: "polygon_sink", dropped = drops_since_warn, interval_secs = warn_interval.as_secs(), "zmq_backpressure");
-                                            drops_since_warn = 0; last_warn = Instant::now();
+                                            drops_since_warn = 0;
+                                            last_warn = Instant::now();
                                         }
                                     } else {
                                         error!(target: "polygon_sink", error = %e, "zmq_send_error");
