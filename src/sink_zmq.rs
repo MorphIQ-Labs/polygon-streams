@@ -31,9 +31,7 @@ pub fn spawn_zmq_publisher(
     notify_shutdown: Arc<Notify>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let ctx = match Context::new() {
-            c @ _ => c,
-        };
+        let ctx = Context::new();
         let mut last_warn = Instant::now() - warn_interval;
         let mut drops_since_warn: u64 = 0;
 
