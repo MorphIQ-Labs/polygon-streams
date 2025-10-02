@@ -1,17 +1,17 @@
-use serde::Serialize;
-use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufWriter};
-use tokio::sync::mpsc::Receiver;
-use tokio::sync::Notify;
-use tracing::{warn, error};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::path::Path;
-use std::borrow::Cow;
-#[cfg(unix)]
-use tokio::signal::unix::{signal, SignalKind};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use futures::future::pending;
+use serde::Serialize;
+use serde_json::Value;
+use std::borrow::Cow;
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncWriteExt, BufWriter};
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::Notify;
+use tracing::{error, warn};
 
 use crate::metrics::Metrics;
 
@@ -48,7 +48,11 @@ pub enum NdjsonDest {
 
 impl NdjsonDest {
     pub fn from_str(s: &str) -> Self {
-        if s.eq_ignore_ascii_case("stdout") { NdjsonDest::Stdout } else { NdjsonDest::File(s.to_string()) }
+        if s.eq_ignore_ascii_case("stdout") {
+            NdjsonDest::Stdout
+        } else {
+            NdjsonDest::File(s.to_string())
+        }
     }
 }
 
@@ -58,7 +62,11 @@ pub fn derive_split_paths(path: &str) -> (String, String) {
     let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
     let parent = p.parent().map(|d| d.to_path_buf()).unwrap_or_default();
     let make = |suffix: &str| -> String {
-        let filename = if ext.is_empty() { format!("{}.{}", stem, suffix) } else { format!("{}.{}.{}", stem, suffix, ext) };
+        let filename = if ext.is_empty() {
+            format!("{}.{}", stem, suffix)
+        } else {
+            format!("{}.{}.{}", stem, suffix, ext)
+        };
         parent.join(filename).to_string_lossy().to_string()
     };
     (make("trades"), make("quotes"))
@@ -99,16 +107,46 @@ pub fn spawn_ndjson_writer(
             NdjsonDest::Stdout => {
                 let stdout = tokio::io::stdout();
                 let mut w = BufWriter::new(stdout);
-                writer_loop_stdout(&mut rx, &mut w, &metrics, &notify_shutdown, warn_interval, flush_every, flush_interval).await;
+                writer_loop_stdout(
+                    &mut rx,
+                    &mut w,
+                    &metrics,
+                    &notify_shutdown,
+                    warn_interval,
+                    flush_every,
+                    flush_interval,
+                )
+                .await;
             }
             NdjsonDest::File(path) => {
-                writer_loop_file(&mut rx, Path::new(&path), &metrics, &notify_shutdown, warn_interval, max_bytes, rotate_secs, gzip, reopen_on_hup, flush_every, flush_interval).await;
+                writer_loop_file(
+                    &mut rx,
+                    Path::new(&path),
+                    &metrics,
+                    &notify_shutdown,
+                    warn_interval,
+                    max_bytes,
+                    rotate_secs,
+                    gzip,
+                    reopen_on_hup,
+                    flush_every,
+                    flush_interval,
+                )
+                .await;
             }
         }
     })
 }
 
-async fn writer_loop_stdout<W: AsyncWriteExt + Unpin>(rx: &mut Receiver<NdjsonEvent>, w: &mut BufWriter<W>, metrics: &Metrics, notify_shutdown: &std::sync::Arc<Notify>, warn_interval: Duration, flush_every: usize, flush_interval: Duration) {
+async fn writer_loop_stdout<W: AsyncWriteExt + Unpin>(
+    rx: &mut Receiver<NdjsonEvent>,
+    w: &mut BufWriter<W>,
+    metrics: &Metrics,
+    notify_shutdown: &std::sync::Arc<Notify>,
+    warn_interval: Duration,
+    flush_every: usize,
+    flush_interval: Duration,
+) {
     let mut last_warn = Instant::now() - warn_interval;
     let mut write_errors_since_warn: u64 = 0;
     let mut since_flush: usize = 0;
@@ -130,8 +168,31 @@ async fn writer_loop_stdout<W: AsyncWriteExt + Unpin>(rx: &mut Receiver<NdjsonEv
     }
 }
 
-async fn writer_loop_file(rx: &mut Receiver<NdjsonEvent>, path: &Path, metrics: &Metrics, notify_shutdown: &std::sync::Arc<Notify>, warn_interval: Duration, max_bytes: Option<u64>, rotate_secs: Option<u64>, gzip: bool, reopen_on_hup: bool, flush_every: usize, flush_interval: Duration) {
-    let f = match tokio::fs::OpenOptions::new().create(true).append(true).open(path).await { Ok(f)=>f, Err(e)=>{ error!(error=%e, "ndjson_open_failed"); return; } };
+async fn writer_loop_file(
+    rx: &mut Receiver<NdjsonEvent>,
+    path: &Path,
+    metrics: &Metrics,
+    notify_shutdown: &std::sync::Arc<Notify>,
+    warn_interval: Duration,
+    max_bytes: Option<u64>,
+    rotate_secs: Option<u64>,
+    gzip: bool,
+    reopen_on_hup: bool,
+    flush_every: usize,
+    flush_interval: Duration,
+) {
+    let f = match tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+    {
+        Ok(f) => f,
+        Err(e) => {
+            error!(error=%e, "ndjson_open_failed");
+            return;
+        }
+    };
     let mut w = BufWriter::new(f);
     let mut last_warn = Instant::now() - warn_interval;
     let mut write_errors_since_warn: u64 = 0;
@@ -140,7 +201,11 @@ async fn writer_loop_file(rx: &mut Receiver<NdjsonEvent>, path: &Path, metrics: 
     let mut written_bytes: u64 = 0;
     let mut last_rotate = Instant::now();
     #[cfg(unix)]
-    let mut hup_stream = if reopen_on_hup { Some(signal(SignalKind::hangup()).expect("hup")) } else { None };
+    let mut hup_stream = if reopen_on_hup {
+        Some(signal(SignalKind::hangup()).expect("hup"))
+    } else {
+        None
+    };
     #[cfg(not(unix))]
     let mut hup_stream: Option<()> = None;
     loop {
@@ -199,10 +264,14 @@ async fn rotate_file(path: &Path, gzip: bool) {
             encoder.finish().map_err(|_| ())?;
             let _ = std::fs::remove_file(&rotated_clone);
             Ok::<(), ()>(())
-        }).await;
+        })
+        .await;
     }
 }
 
 pub fn now_millis() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }

@@ -1,15 +1,15 @@
 #[cfg(feature = "zmq-sink")]
 use {
-    zmq::{Context, Socket, SocketType, DONTWAIT},
-    serde_json::to_vec,
-    tokio::sync::mpsc::Receiver,
-    tokio::sync::{oneshot, Notify},
-    smallvec::SmallVec,
-    tracing::{error, info, warn},
-    std::sync::Arc,
-    std::time::{Duration, Instant},
     crate::metrics::Metrics,
     crate::ndjson::NdjsonEvent,
+    serde_json::to_vec,
+    smallvec::SmallVec,
+    std::sync::Arc,
+    std::time::{Duration, Instant},
+    tokio::sync::mpsc::Receiver,
+    tokio::sync::{oneshot, Notify},
+    tracing::{error, info, warn},
+    zmq::{Context, Socket, SocketType, DONTWAIT},
 };
 
 #[cfg(feature = "zmq-sink")]
@@ -19,21 +19,16 @@ fn make_socket(
     bind: bool,
     snd_hwm: Option<i32>,
 ) -> Result<Socket, String> {
-    let sock = ctx
-        .socket(SocketType::PUB)
-        .map_err(|e| e.to_string())?;
+    let sock = ctx.socket(SocketType::PUB).map_err(|e| e.to_string())?;
 
     if let Some(hwm) = snd_hwm {
-        sock.set_sndhwm(hwm)
-            .map_err(|e| e.to_string())?;
+        sock.set_sndhwm(hwm).map_err(|e| e.to_string())?;
     }
 
     if bind {
-        sock.bind(endpoint)
-            .map_err(|e| e.to_string())?;
+        sock.bind(endpoint).map_err(|e| e.to_string())?;
     } else {
-        sock.connect(endpoint)
-            .map_err(|e| e.to_string())?;
+        sock.connect(endpoint).map_err(|e| e.to_string())?;
     }
 
     Ok(sock)
@@ -59,12 +54,16 @@ pub fn spawn_zmq_publisher(
         let socket = match make_socket(&ctx, &endpoint, bind, snd_hwm) {
             Ok(s) => {
                 info!(target: "polygon_sink", mode = "zmq", endpoint = %endpoint, bind = bind, "zmq_ready");
-                if let Some(tx) = init_tx { let _ = tx.send(true); }
+                if let Some(tx) = init_tx {
+                    let _ = tx.send(true);
+                }
                 s
             }
             Err(emsg) => {
                 error!(target: "polygon_sink", error = %emsg, endpoint = %endpoint, bind = bind, "zmq_socket_error");
-                if let Some(tx) = init_tx { let _ = tx.send(false); }
+                if let Some(tx) = init_tx {
+                    let _ = tx.send(false);
+                }
                 // Drain until shutdown so we don't stall tasks
                 loop {
                     tokio::select! {
@@ -152,7 +151,9 @@ pub fn spawn_zmq_publisher(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Report init failure to caller explicitly
-        if let Some(tx) = init_tx { let _ = tx.send(false); }
+        if let Some(tx) = init_tx {
+            let _ = tx.send(false);
+        }
         // Log context (endpoint/bind) for clarity
         tracing::error!(target: "polygon_sink", endpoint = %endpoint, bind = bind, "zmq feature not enabled; rebuild with --features zmq-sink");
         // Gracefully drain until shutdown to avoid backpressure upstream

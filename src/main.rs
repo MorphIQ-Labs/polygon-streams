@@ -3,48 +3,62 @@
 use std::sync::Arc;
 
 use futures::{SinkExt, StreamExt};
-use tracing::{debug, error, info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use std::time::Duration;
+use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::{mpsc, Notify};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream};
 use tokio::time::sleep;
-use std::time::Duration;
-use tokio::time::{timeout, interval, MissedTickBehavior};
-use std::time::Instant;
+use tokio::time::{interval, timeout, MissedTickBehavior};
+use tokio_tungstenite::{connect_async, tungstenite::Message, WebSocketStream};
+use tracing::{debug, error, info, warn};
+use tracing_subscriber::{fmt, EnvFilter};
 
-use crate::model::RequestMessage;
-use crate::config::Config;
-use crate::metrics::{Metrics, spawn_http_server, spawn_stats_logger};
-use crate::ndjson::{NdjsonEvent, NdjsonDest, spawn_ndjson_writer, now_millis, derive_split_paths};
 use crate::cluster::ClusterHandler;
+use crate::config::Config;
+use crate::metrics::{spawn_http_server, spawn_stats_logger, Metrics};
+use crate::model::RequestMessage;
+use crate::ndjson::{derive_split_paths, now_millis, spawn_ndjson_writer, NdjsonDest, NdjsonEvent};
 
-mod model;
+mod cluster;
 mod config;
 mod metrics;
+mod model;
 mod ndjson;
-mod cluster;
 mod sink_zmq;
 
 // env-only helpers are defined in config.rs
 
 #[derive(Clone)]
-struct IncludePattern { kind: char, prefix: String, wildcard: bool }
+struct IncludePattern {
+    kind: char,
+    prefix: String,
+    wildcard: bool,
+}
 
 fn parse_include_patterns(s: &str) -> Vec<IncludePattern> {
     let mut v = Vec::new();
     for raw in s.split(',') {
         let s = raw.trim();
-        if s.is_empty() { continue; }
+        if s.is_empty() {
+            continue;
+        }
         let mut parts = s.splitn(2, ':');
         let kind_s = parts.next().unwrap_or("");
         let rest = parts.next().unwrap_or("");
         let kind = kind_s.chars().next().unwrap_or('*');
         let wildcard = rest.ends_with('*');
-        let prefix = if wildcard { rest.trim_end_matches('*').to_string() } else { rest.to_string() };
-        v.push(IncludePattern { kind, prefix, wildcard });
+        let prefix = if wildcard {
+            rest.trim_end_matches('*').to_string()
+        } else {
+            rest.to_string()
+        };
+        v.push(IncludePattern {
+            kind,
+            prefix,
+            wildcard,
+        });
     }
     v
 }
@@ -72,14 +86,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notify_shutdown = Arc::new(Notify::new());
 
     // Metrics
-    let metrics = Metrics::new(cfg.cluster.clone(), cfg.subscription.clone(), cfg.reconnect_buckets.clone(), cfg.interarrival_buckets.clone());
+    let metrics = Metrics::new(
+        cfg.cluster.clone(),
+        cfg.subscription.clone(),
+        cfg.reconnect_buckets.clone(),
+        cfg.interarrival_buckets.clone(),
+    );
 
     // Spawn HTTP server for /metrics and /health
-    let _http_handle = spawn_http_server(metrics.clone(), cfg.metrics_addr.clone(), notify_shutdown.clone());
-    let _stats_handle = spawn_stats_logger(metrics.clone(), notify_shutdown.clone(), cfg.stats_interval);
+    let _http_handle = spawn_http_server(
+        metrics.clone(),
+        cfg.metrics_addr.clone(),
+        notify_shutdown.clone(),
+    );
+    let _stats_handle =
+        spawn_stats_logger(metrics.clone(), notify_shutdown.clone(), cfg.stats_interval);
 
     // Hostname for enrichment
-    let host = Arc::new(hostname::get().map(|h| h.to_string_lossy().to_string()).unwrap_or_else(|_| "unknown".to_string()));
+    let host = Arc::new(
+        hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string()),
+    );
 
     // Build cluster handler
     let handler: Arc<dyn ClusterHandler> = cluster::build_handler(&cfg.cluster).into();
@@ -96,89 +124,103 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.ndjson_max_bytes = Some(100 * 1024 * 1024);
     }
 
-    let (ndjson_tx_opt, ndjson_trades_tx_opt, ndjson_quotes_tx_opt) = if sink_kind == "ndjson" || sink_kind == "stdout" {
-        // For stdout, force stdout destination
-        let dest_override = if sink_kind == "stdout" { Some("stdout".to_string()) } else { None };
-        let ndjson_dest = dest_override.as_deref().unwrap_or(&cfg.ndjson_dest);
+    let (ndjson_tx_opt, ndjson_trades_tx_opt, ndjson_quotes_tx_opt) =
+        if sink_kind == "ndjson" || sink_kind == "stdout" {
+            // For stdout, force stdout destination
+            let dest_override = if sink_kind == "stdout" {
+                Some("stdout".to_string())
+            } else {
+                None
+            };
+            let ndjson_dest = dest_override.as_deref().unwrap_or(&cfg.ndjson_dest);
 
-        if cfg.ndjson_split_per_type && ndjson_dest.to_ascii_lowercase() != "stdout" {
-            let (trades_path, quotes_path) = derive_split_paths(ndjson_dest);
-            let (tx_t, rx_t) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
-            let (tx_q, rx_q) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
-            let handle_t = spawn_ndjson_writer(
-                rx_t,
-                NdjsonDest::from_str(&trades_path),
-                metrics.clone(),
-                cfg.ndjson_warn_interval,
-                cfg.ndjson_max_bytes,
-                cfg.ndjson_rotate_secs,
-                cfg.ndjson_gzip,
-                cfg.ndjson_reopen_on_hup,
-                cfg.ndjson_flush_every,
-                cfg.ndjson_flush_interval,
-                notify_shutdown.clone()
-            );
-            let handle_q = spawn_ndjson_writer(
-                rx_q,
-                NdjsonDest::from_str(&quotes_path),
-                metrics.clone(),
-                cfg.ndjson_warn_interval,
-                cfg.ndjson_max_bytes,
-                cfg.ndjson_rotate_secs,
-                cfg.ndjson_gzip,
-                cfg.ndjson_reopen_on_hup,
-                cfg.ndjson_flush_every,
-                cfg.ndjson_flush_interval,
-                notify_shutdown.clone()
-            );
-            let _ = (handle_t, handle_q);
-            (None, Some(tx_t), Some(tx_q))
-        } else {
-            let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
-            let handle = spawn_ndjson_writer(
+            if cfg.ndjson_split_per_type && ndjson_dest.to_ascii_lowercase() != "stdout" {
+                let (trades_path, quotes_path) = derive_split_paths(ndjson_dest);
+                let (tx_t, rx_t) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
+                let (tx_q, rx_q) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
+                let handle_t = spawn_ndjson_writer(
+                    rx_t,
+                    NdjsonDest::from_str(&trades_path),
+                    metrics.clone(),
+                    cfg.ndjson_warn_interval,
+                    cfg.ndjson_max_bytes,
+                    cfg.ndjson_rotate_secs,
+                    cfg.ndjson_gzip,
+                    cfg.ndjson_reopen_on_hup,
+                    cfg.ndjson_flush_every,
+                    cfg.ndjson_flush_interval,
+                    notify_shutdown.clone(),
+                );
+                let handle_q = spawn_ndjson_writer(
+                    rx_q,
+                    NdjsonDest::from_str(&quotes_path),
+                    metrics.clone(),
+                    cfg.ndjson_warn_interval,
+                    cfg.ndjson_max_bytes,
+                    cfg.ndjson_rotate_secs,
+                    cfg.ndjson_gzip,
+                    cfg.ndjson_reopen_on_hup,
+                    cfg.ndjson_flush_every,
+                    cfg.ndjson_flush_interval,
+                    notify_shutdown.clone(),
+                );
+                let _ = (handle_t, handle_q);
+                (None, Some(tx_t), Some(tx_q))
+            } else {
+                let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.ndjson_channel_cap);
+                let handle = spawn_ndjson_writer(
+                    rx_ev,
+                    NdjsonDest::from_str(ndjson_dest),
+                    metrics.clone(),
+                    cfg.ndjson_warn_interval,
+                    cfg.ndjson_max_bytes,
+                    cfg.ndjson_rotate_secs,
+                    cfg.ndjson_gzip,
+                    cfg.ndjson_reopen_on_hup,
+                    cfg.ndjson_flush_every,
+                    cfg.ndjson_flush_interval,
+                    notify_shutdown.clone(),
+                );
+                let _ = handle;
+                (Some(tx_ev), None, None)
+            }
+        } else if sink_kind == "zmq" {
+            let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.zmq_channel_cap);
+            let (init_tx, init_rx) = tokio::sync::oneshot::channel();
+            let _handle = sink_zmq::spawn_zmq_publisher(
                 rx_ev,
-                NdjsonDest::from_str(ndjson_dest),
+                cfg.zmq_endpoint.clone(),
+                cfg.zmq_bind,
+                cfg.zmq_snd_hwm,
+                cfg.zmq_topic_prefix.clone(),
+                cfg.zmq_warn_interval,
                 metrics.clone(),
-                cfg.ndjson_warn_interval,
-                cfg.ndjson_max_bytes,
-                cfg.ndjson_rotate_secs,
-                cfg.ndjson_gzip,
-                cfg.ndjson_reopen_on_hup,
-                cfg.ndjson_flush_every,
-                cfg.ndjson_flush_interval,
-                notify_shutdown.clone()
+                notify_shutdown.clone(),
+                Some(init_tx),
             );
-            let _ = handle;
+            match timeout(Duration::from_secs(2), init_rx).await {
+                Ok(Ok(true)) => { /* ok */ }
+                Ok(Ok(false)) => {
+                    warn!(target: "polygon_sink", "zmq_init_failed");
+                }
+                Ok(Err(_)) => {
+                    warn!(target: "polygon_sink", "zmq_init_channel_closed");
+                }
+                Err(_) => {
+                    warn!(target: "polygon_sink", "zmq_init_timeout");
+                }
+            }
             (Some(tx_ev), None, None)
-        }
-    } else if sink_kind == "zmq" {
-        let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.zmq_channel_cap);
-        let (init_tx, init_rx) = tokio::sync::oneshot::channel();
-        let _handle = sink_zmq::spawn_zmq_publisher(
-            rx_ev,
-            cfg.zmq_endpoint.clone(),
-            cfg.zmq_bind,
-            cfg.zmq_snd_hwm,
-            cfg.zmq_topic_prefix.clone(),
-            cfg.zmq_warn_interval,
-            metrics.clone(),
-            notify_shutdown.clone(),
-            Some(init_tx),
-        );
-        match timeout(Duration::from_secs(2), init_rx).await {
-            Ok(Ok(true)) => { /* ok */ }
-            Ok(Ok(false)) => { warn!(target: "polygon_sink", "zmq_init_failed"); }
-            Ok(Err(_)) => { warn!(target: "polygon_sink", "zmq_init_channel_closed"); }
-            Err(_) => { warn!(target: "polygon_sink", "zmq_init_timeout"); }
-        }
-        (Some(tx_ev), None, None)
-    } else {
-        (None, None, None)
-    };
+        } else {
+            (None, None, None)
+        };
 
     // Spawn a task to process incoming messages
     // Compile include patterns for NDJSON if provided
-    let include_patterns = cfg.ndjson_include.as_ref().map(|s| parse_include_patterns(&s.join(",")));
+    let include_patterns = cfg
+        .ndjson_include
+        .as_ref()
+        .map(|s| parse_include_patterns(&s.join(",")));
     let processor_handle = spawn_message_processor(
         rx,
         notify_shutdown.clone(),
@@ -186,7 +228,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ndjson_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_trades_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_quotes_tx_opt.as_ref().map(|tx| tx.clone()),
-        if sink_kind == "zmq" { cfg.zmq_warn_interval } else { cfg.ndjson_warn_interval },
+        if sink_kind == "zmq" {
+            cfg.zmq_warn_interval
+        } else {
+            cfg.ndjson_warn_interval
+        },
         sink_kind == "zmq",
         include_patterns,
         cfg.ndjson_sample_quotes.max(1),
@@ -216,7 +262,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("Connect failed: {}", err);
                 metrics.inc_error();
                 metrics.inc_reconnect_failure();
-                if wait_or_shutdown(backoff, notify_shutdown.clone()).await { break; }
+                if wait_or_shutdown(backoff, notify_shutdown.clone()).await {
+                    break;
+                }
                 backoff = (backoff * 2).min(max_backoff);
                 continue;
             }
@@ -229,21 +277,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 warn!("Authentication failed: {}", err);
                 metrics.inc_error();
                 metrics.inc_reconnect_failure();
-                if wait_or_shutdown(backoff, notify_shutdown.clone()).await { break; }
+                if wait_or_shutdown(backoff, notify_shutdown.clone()).await {
+                    break;
+                }
                 backoff = (backoff * 2).min(max_backoff);
                 continue;
             }
         };
 
         // Subscribe to the specified topic
-        let effective_sub = if cfg.subscription.is_empty() { handler.default_subscription().to_string() } else { cfg.subscription.clone() };
+        let effective_sub = if cfg.subscription.is_empty() {
+            handler.default_subscription().to_string()
+        } else {
+            cfg.subscription.clone()
+        };
         let socket = match subscribe(socket, &effective_sub).await {
             Ok(s) => s,
             Err(err) => {
                 warn!("Subscribe failed: {}", err);
                 metrics.inc_error();
                 metrics.inc_reconnect_failure();
-                if wait_or_shutdown(backoff, notify_shutdown.clone()).await { break; }
+                if wait_or_shutdown(backoff, notify_shutdown.clone()).await {
+                    break;
+                }
                 backoff = (backoff * 2).min(max_backoff);
                 continue;
             }
@@ -281,7 +337,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        if wait_or_shutdown(backoff, notify_shutdown.clone()).await { break; }
+        if wait_or_shutdown(backoff, notify_shutdown.clone()).await {
+            break;
+        }
         backoff = (backoff * 2).min(max_backoff);
     }
 
@@ -325,14 +383,24 @@ where
                         if v.get("ev").and_then(|x| x.as_str()) == Some("status") {
                             let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
                             info!("Status message: {}", status);
-                            if status == "auth_failed" { let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or(""); error!("Authentication failed: {}", msg); return Err("Authentication failed.".into()); }
+                            if status == "auth_failed" {
+                                let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+                                error!("Authentication failed: {}", msg);
+                                return Err("Authentication failed.".into());
+                            }
                         }
                     }
                 }
             }
-            Err(err) => { error!("Error during authentication: {}", err); return Err(err.into()); }
+            Err(err) => {
+                error!("Error during authentication: {}", err);
+                return Err(err.into());
+            }
         }
-    } else { error!("No authentication response received."); return Err("No authentication response received.".into()); }
+    } else {
+        error!("No authentication response received.");
+        return Err("No authentication response received.".into());
+    }
 
     Ok(socket)
 }
@@ -368,14 +436,24 @@ where
                         if v.get("ev").and_then(|x| x.as_str()) == Some("status") {
                             let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("");
                             info!("Status message: {}", status);
-                            if status == "error" || status == "auth_failed" { let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or(""); error!("Subscription failed: {}", msg); return Err("Subscription failed.".into()); }
+                            if status == "error" || status == "auth_failed" {
+                                let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+                                error!("Subscription failed: {}", msg);
+                                return Err("Subscription failed.".into());
+                            }
                         }
                     }
                 }
             }
-            Err(err) => { error!("Error during subscription: {}", err); return Err(err.into()); }
+            Err(err) => {
+                error!("Error during subscription: {}", err);
+                return Err(err.into());
+            }
         }
-    } else { error!("No subscription response received."); return Err("No subscription response received.".into()); }
+    } else {
+        error!("No subscription response received.");
+        return Err("No subscription response received.".into());
+    }
 
     Ok(socket)
 }
@@ -412,7 +490,11 @@ impl NdjsonBp {
 }
 
 fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
-    if bp.is_zmq_sink { metrics.inc_zmq_drop(); } else { metrics.inc_ndjson_drop(); }
+    if bp.is_zmq_sink {
+        metrics.inc_zmq_drop();
+    } else {
+        metrics.inc_ndjson_drop();
+    }
     bp.dropped_since_warn = bp.dropped_since_warn.saturating_add(1);
     if bp.last_warn.elapsed() >= bp.warn_interval {
         if bp.is_zmq_sink {
@@ -464,7 +546,12 @@ fn spawn_message_processor(
     handler: Arc<dyn ClusterHandler>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ndjson_bp = NdjsonBp::new(ndjson_warn_interval, include_patterns, sample_quotes_n, is_zmq_sink);
+        let mut ndjson_bp = NdjsonBp::new(
+            ndjson_warn_interval,
+            include_patterns,
+            sample_quotes_n,
+            is_zmq_sink,
+        );
         loop {
             tokio::select! {
                 maybe = rx.recv() => {
@@ -617,9 +704,16 @@ fn process_message(
         let mut buf: Vec<u8> = Vec::with_capacity(256);
         for ev in events {
             match ev.ev.as_str() {
-                "status" => { metrics.inc_status(); continue; }
-                "T" => { metrics.inc_trade(); }
-                "Q" => { metrics.inc_quote(); }
+                "status" => {
+                    metrics.inc_status();
+                    continue;
+                }
+                "T" => {
+                    metrics.inc_trade();
+                }
+                "Q" => {
+                    metrics.inc_quote();
+                }
                 _ => {}
             }
             // Detailed event logging (guarded to avoid expensive operations when disabled)
@@ -627,7 +721,9 @@ fn process_message(
                 buf.clear();
                 buf.extend_from_slice(ev.ev.as_bytes());
                 buf.push(b':');
-                if let Some(sym) = &ev.symbol { buf.extend_from_slice(sym.as_bytes()); }
+                if let Some(sym) = &ev.symbol {
+                    buf.extend_from_slice(sym.as_bytes());
+                }
                 buf.push(b' ');
                 if let Ok(payload_json) = serde_json::to_string(&ev.payload) {
                     buf.extend_from_slice(payload_json.as_bytes());
@@ -638,10 +734,21 @@ fn process_message(
             }
 
             // NDJSON emission
-            let choose_tx = match ev.ev.as_str() { "T" => ndjson_trades_tx.or(ndjson_tx), "Q" => ndjson_quotes_tx.or(ndjson_tx), _ => ndjson_tx };
+            let choose_tx = match ev.ev.as_str() {
+                "T" => ndjson_trades_tx.or(ndjson_tx),
+                "Q" => ndjson_quotes_tx.or(ndjson_tx),
+                _ => ndjson_tx,
+            };
             if let Some(tx) = choose_tx {
                 // Sampling for quotes
-                if ev.ev.as_str() == "Q" { ndjson_bp.quotes_counter = ndjson_bp.quotes_counter.saturating_add(1); if ndjson_bp.sample_quotes_n>1 && (ndjson_bp.quotes_counter % ndjson_bp.sample_quotes_n != 0) { continue; } }
+                if ev.ev.as_str() == "Q" {
+                    ndjson_bp.quotes_counter = ndjson_bp.quotes_counter.saturating_add(1);
+                    if ndjson_bp.sample_quotes_n > 1
+                        && (ndjson_bp.quotes_counter % ndjson_bp.sample_quotes_n != 0)
+                    {
+                        continue;
+                    }
+                }
                 // Include filters
                 if let Some(ref pats) = ndjson_bp.include {
                     let kind = ev.ev.chars().next().unwrap_or('*');
@@ -649,10 +756,20 @@ fn process_message(
                     let mut matched = false;
                     for p in pats.iter() {
                         if p.kind == kind || p.kind == '*' {
-                            if p.wildcard { if sym.starts_with(&p.prefix) { matched=true; break; } } else if sym == p.prefix { matched=true; break; }
+                            if p.wildcard {
+                                if sym.starts_with(&p.prefix) {
+                                    matched = true;
+                                    break;
+                                }
+                            } else if sym == p.prefix {
+                                matched = true;
+                                break;
+                            }
                         }
                     }
-                    if !matched { continue; }
+                    if !matched {
+                        continue;
+                    }
                 }
                 ndjson_bp.seq_counter = ndjson_bp.seq_counter.saturating_add(1);
                 let ev_out = make_ndjson_event(
@@ -666,8 +783,12 @@ fn process_message(
                 );
                 match tx.try_send(ev_out) {
                     Ok(()) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => { record_sink_backpressure(&metrics, ndjson_bp); }
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => { metrics.inc_error(); }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        record_sink_backpressure(&metrics, ndjson_bp);
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        metrics.inc_error();
+                    }
                 }
             }
         }
