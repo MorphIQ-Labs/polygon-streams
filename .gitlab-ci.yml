@@ -1,0 +1,62 @@
+# Define stages for the pipeline
+stages:
+  - test
+  - build
+  - deploy
+
+# Variables used across jobs
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""  # Needed for Docker-in-Docker
+  CONTAINER_RELEASE_IMAGE: $CI_REGISTRY_IMAGE:latest
+  RUST_VERSION: 1.82
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  TARGET_DIR: $CI_PROJECT_DIR/target
+
+# Cache configuration for Rust dependencies and build artifacts
+cache:
+  paths:
+    - .cargo/
+    - target/
+    - Cargo.lock
+
+# Test stage - runs cargo test
+test_rust:
+  stage: test
+  image: rust:${RUST_VERSION}
+  before_script:
+    - rustc --version
+    - cargo --version
+    # Install required components
+    - rustup component add rustfmt
+    - rustup component add clippy
+  script:
+    - cargo fmt -- --check  # Check code formatting
+    - cargo clippy -- -D warnings  # Lint checks
+    - cargo test  # Run tests
+  when: always
+
+# Build stage - builds the Docker image
+build_docker_image:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  script:
+    - docker login -u gitlab-ci-token -p $CI_JOB_TOKEN $CI_REGISTRY
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        # For tags, use the exact tag name
+        CONTAINER_IMAGE=$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG
+      else
+        # For branches, use the slug
+        CONTAINER_IMAGE=$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+      fi
+    - docker build -t $CONTAINER_IMAGE .
+    - docker push $CONTAINER_IMAGE
+    # Tag and push as latest if it's the develop branch
+    - if [ "$CI_COMMIT_REF_NAME" == "develop" ]; then
+      docker tag $CONTAINER_IMAGE $CONTAINER_RELEASE_IMAGE;
+      docker push $CONTAINER_RELEASE_IMAGE;
+      fi
+  when: always
