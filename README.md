@@ -200,10 +200,13 @@ RUST_LOG=warn,polygon_config=info cargo run --release
   - Tune `HEARTBEAT_INTERVAL_SECS` if needed.
 - Readiness never READY
   - Ensure messages are flowing (topic matches cluster). Adjust `READY_MIN_MESSAGES` / `READY_DELAY_MS`.
-- Backpressure drops (processing or NDJSON)
-  - Increase `CHANNEL_CAP` / `NDJSON_CHANNEL_CAP`, enable rotation (`NDJSON_MAX_BYTES`).
-  - Reduce volume with `NDJSON_INCLUDE` / `NDJSON_SAMPLE_QUOTES`.
-  - Watch `polygon_channel_drops_total` and `polygon_ndjson_drops_total`.
+- Backpressure drops (processing / NDJSON / ZMQ)
+  - Increase capacities: `CHANNEL_CAP`, `NDJSON_CHANNEL_CAP`, or `ZMQ_CHANNEL_CAP` (for ZMQ sink).
+  - For NDJSON, enable rotation (`NDJSON_MAX_BYTES`) and consider `NDJSON_INCLUDE` / `NDJSON_SAMPLE_QUOTES` to reduce volume.
+  - Metrics to watch:
+    - Processing drops: `polygon_channel_drops_total`
+    - NDJSON: `polygon_ndjson_drops_total`, `polygon_ndjson_written_total`
+    - ZMQ: `polygon_zmq_drops_total`, `polygon_zmq_sent_total`
 
 ## Error Handling
 
@@ -215,9 +218,11 @@ RUST_LOG=warn,polygon_config=info cargo run --release
 - Health: `curl http://127.0.0.1:9898/health` -> `200 OK` with `OK`
 - Readiness: `curl http://127.0.0.1:9898/ready` -> `200 READY` after successful subscribe (503 otherwise)
 - Metrics: `curl http://127.0.0.1:9898/metrics` (Prometheus text)
-  - Counters include `polygon_reconnects_total`, `polygon_reconnect_success_total`, `polygon_reconnect_failure_total`,
+  - Core: `polygon_build_info{...} 1`, `polygon_reconnects_total`, `polygon_reconnect_success_total`, `polygon_reconnect_failure_total`,
     `polygon_read_timeouts_total`, `polygon_heartbeats_sent_total`, `polygon_messages_received_total`,
-    `polygon_trades_total`, `polygon_quotes_total`, `polygon_errors_total`, and `polygon_build_info{...} 1`.
+    `polygon_trades_total`, `polygon_quotes_total`, `polygon_errors_total`
+  - Backpressure + sinks: `polygon_channel_drops_total`, `polygon_ndjson_drops_total`, `polygon_ndjson_written_total`,
+    `polygon_zmq_drops_total`, `polygon_zmq_sent_total`
 
 ## Contributing
 
