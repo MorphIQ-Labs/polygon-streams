@@ -435,7 +435,7 @@ fn make_ndjson_event(
 ) -> NdjsonEvent {
     NdjsonEvent {
         ingest_ts: now_millis(),
-        r#type: Box::leak(typ.to_string().into_boxed_str()),
+        r#type: typ.to_string(),
         symbol: symbol.to_string(),
         topic: metrics.topic().to_string(),
         feed: metrics.feed().to_string(),

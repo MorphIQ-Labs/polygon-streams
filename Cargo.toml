@@ -16,6 +16,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 flate2 = "1.0"
 hostname = "0.4.1"
+smallvec = "1.13"
 
 [features]
 default = []

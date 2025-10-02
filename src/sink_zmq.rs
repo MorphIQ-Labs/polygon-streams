@@ -4,6 +4,7 @@ use {
     serde_json::to_vec,
     tokio::sync::mpsc::Receiver,
     tokio::sync::{oneshot, Notify},
+    smallvec::SmallVec,
     tracing::{error, info, warn},
     std::sync::Arc,
     std::time::{Duration, Instant},
@@ -76,8 +77,8 @@ pub fn spawn_zmq_publisher(
         };
 
         // Main pump loop
-        // Reuse topic buffer to minimize allocations per send
-        let mut topic_buf: Vec<u8> = Vec::with_capacity(64);
+        // Reuse topic buffer (smallvec) to minimize allocations per send
+        let mut topic_buf: SmallVec<[u8; 64]> = SmallVec::new();
         loop {
             tokio::select! {
                 _ = notify_shutdown.notified() => {
@@ -91,7 +92,7 @@ pub fn spawn_zmq_publisher(
                             // Build topic directly as bytes to avoid intermediate String
                             topic_buf.clear();
                             let need = topic_prefix.len() + ev.r#type.len() + if ev.symbol.is_empty() { 0 } else { 1 + ev.symbol.len() };
-                            if topic_buf.capacity() < need { topic_buf.reserve(need - topic_buf.capacity()); }
+                            topic_buf.reserve(need.saturating_sub(topic_buf.capacity()));
                             topic_buf.extend_from_slice(topic_prefix.as_bytes());
                             topic_buf.extend_from_slice(ev.r#type.as_bytes());
                             if !ev.symbol.is_empty() { topic_buf.push(b':'); topic_buf.extend_from_slice(ev.symbol.as_bytes()); }
@@ -104,7 +105,7 @@ pub fn spawn_zmq_publisher(
                                 }
                             };
                             // Non-blocking send; drop on EAGAIN
-                            match socket.send_multipart(&[topic_buf.as_slice(), &payload], DONTWAIT) {
+                            match socket.send_multipart(&[&topic_buf[..], &payload], DONTWAIT) {
                                 Ok(()) => { metrics.inc_zmq_sent(); }
                                 Err(e) => {
                                     // Drop on backpressure (EAGAIN)

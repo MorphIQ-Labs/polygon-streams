@@ -17,7 +17,7 @@ use crate::metrics::Metrics;
 #[derive(Serialize)]
 pub struct NdjsonEvent {
     pub ingest_ts: i64,
-    pub r#type: &'static str,
+    pub r#type: String,
     pub symbol: String,
     pub topic: String,
     pub feed: String,
