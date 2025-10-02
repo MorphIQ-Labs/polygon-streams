@@ -18,7 +18,6 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
 | `STATS_INTERVAL_SECS` | `60` | Periodic stats log interval |
 | `BP_WARN_INTERVAL_SECS` | `5` | Backpressure warning interval |
 | `SINK` | `stdout` | One of: `stdout`, `ndjson`, `zmq` |
-| `EMIT_NDJSON` | `false` | Legacy toggle; if `SINK` unset and this is `true`, selects `ndjson` |
 | `NDJSON_DEST` | `stdout` | `stdout` or file path |
 | `NDJSON_CHANNEL_CAP` | `2048` | NDJSON pipeline channel capacity |
 | `NDJSON_WARN_INTERVAL_SECS` | `5` | NDJSON backpressure warn interval |
@@ -98,7 +97,6 @@ export POLYGON_API_KEY="your_api_key_here"
 # export READY_MIN_MESSAGES=1         # default: 1
 # export READY_DELAY_MS=0             # default: 0 (milliseconds)
 # NDJSON event stream (always emitted if enabled):
-# export EMIT_NDJSON=true              # default: false
 # export NDJSON_DEST=stdout            # or file path (default: stdout)
 # export NDJSON_CHANNEL_CAP=2048       # default: 2048
 # export NDJSON_WARN_INTERVAL_SECS=5   # default: 5

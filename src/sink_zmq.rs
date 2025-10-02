@@ -3,7 +3,7 @@ use {
     zmq::{Context, Socket, SocketType, DONTWAIT},
     serde_json::to_vec,
     tokio::sync::mpsc::Receiver,
-    tokio::sync::Notify,
+    tokio::sync::{oneshot, Notify},
     tracing::{error, info, warn},
     std::sync::Arc,
     std::time::{Duration, Instant},
@@ -12,10 +12,10 @@ use {
 };
 
 #[cfg(feature = "zmq-sink")]
-fn make_socket(ctx: &Context, endpoint: &str, bind: bool, snd_hwm: Option<i32>) -> Result<Socket, Box<dyn std::error::Error>> {
-    let sock = ctx.socket(SocketType::PUB)?;
-    if let Some(hwm) = snd_hwm { sock.set_sndhwm(hwm)?; }
-    if bind { sock.bind(endpoint)?; } else { sock.connect(endpoint)?; }
+fn make_socket(ctx: &Context, endpoint: &str, bind: bool, snd_hwm: Option<i32>) -> Result<Socket, String> {
+    let sock = ctx.socket(SocketType::PUB).map_err(|e| e.to_string())?;
+    if let Some(hwm) = snd_hwm { sock.set_sndhwm(hwm).map_err(|e| e.to_string())?; }
+    if bind { sock.bind(endpoint).map_err(|e| e.to_string())?; } else { sock.connect(endpoint).map_err(|e| e.to_string())?; }
     Ok(sock)
 }
 
@@ -29,6 +29,7 @@ pub fn spawn_zmq_publisher(
     warn_interval: Duration,
     metrics: Metrics,
     notify_shutdown: Arc<Notify>,
+    init_tx: Option<oneshot::Sender<bool>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let ctx = Context::new();
@@ -38,13 +39,19 @@ pub fn spawn_zmq_publisher(
         let socket = match make_socket(&ctx, &endpoint, bind, snd_hwm) {
             Ok(s) => {
                 info!(target: "polygon_sink", mode = "zmq", endpoint = %endpoint, bind = bind, "zmq_ready");
+                if let Some(tx) = init_tx { let _ = tx.send(true); }
                 s
             }
-            Err(e) => {
-                error!(target: "polygon_sink", error = %e, endpoint = %endpoint, bind = bind, "zmq_socket_error");
-                // Drop receiver to avoid backpressure and exit this task.
-                // Upstream senders will observe a closed channel and account errors.
-                drop(rx);
+            Err(emsg) => {
+                error!(target: "polygon_sink", error = %emsg, endpoint = %endpoint, bind = bind, "zmq_socket_error");
+                if let Some(tx) = init_tx { let _ = tx.send(false); }
+                // Drain until shutdown so we don't stall tasks
+                loop {
+                    tokio::select! {
+                        _ = notify_shutdown.notified() => break,
+                        _ = rx.recv() => {}
+                    }
+                }
                 return;
             }
         };
@@ -111,9 +118,20 @@ pub fn spawn_zmq_publisher(
     warn_interval: std::time::Duration,
     metrics: crate::metrics::Metrics,
     notify_shutdown: std::sync::Arc<tokio::sync::Notify>,
+    init_tx: Option<tokio::sync::oneshot::Sender<bool>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let _ = (rx, endpoint, bind, snd_hwm, topic_prefix, warn_interval, metrics, notify_shutdown);
-        tracing::error!(target: "polygon_sink", "zmq feature not enabled; rebuild with --features zmq-sink");
+        // Report init failure to caller explicitly
+        if let Some(tx) = init_tx { let _ = tx.send(false); }
+        // Log context (endpoint/bind) for clarity
+        tracing::error!(target: "polygon_sink", endpoint = %endpoint, bind = bind, "zmq feature not enabled; rebuild with --features zmq-sink");
+        // Gracefully drain until shutdown to avoid backpressure upstream
+        let mut rx = rx;
+        loop {
+            tokio::select! {
+                _ = notify_shutdown.notified() => break,
+                maybe = rx.recv() => { if maybe.is_none() { break; } }
+            }
+        }
     })
 }

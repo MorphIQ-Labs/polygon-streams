@@ -17,8 +17,6 @@ pub struct Config {
     pub interarrival_buckets: Vec<f64>,
     pub bp_warn_interval: Duration,
     pub stats_interval: Duration,
-    #[allow(dead_code)]
-    pub emit_ndjson: bool,
     pub ndjson_dest: String,
     pub ndjson_channel_cap: usize,
     pub ndjson_warn_interval: Duration,
@@ -99,10 +97,7 @@ impl Config {
             .map(Duration::from_secs)
             .unwrap_or_else(|| Duration::from_secs(60));
 
-        let sink = env::var("SINK").unwrap_or_else(|_| {
-            // Back-compat: if EMIT_NDJSON=true, prefer ndjson; else stdout
-            if parse_bool(env::var("EMIT_NDJSON").ok().as_deref()) { "ndjson".to_string() } else { "stdout".to_string() }
-        });
+        let sink = env::var("SINK").unwrap_or_else(|_| "stdout".to_string());
 
         Ok(Config {
             sink,
@@ -121,7 +116,6 @@ impl Config {
             interarrival_buckets,
             bp_warn_interval,
             stats_interval,
-            emit_ndjson: parse_bool(env::var("EMIT_NDJSON").ok().as_deref()),
             ndjson_dest: env::var("NDJSON_DEST").unwrap_or_else(|_| "stdout".to_string()),
             ndjson_channel_cap: env::var("NDJSON_CHANNEL_CAP").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(2048),
             ndjson_warn_interval: env::var("NDJSON_WARN_INTERVAL_SECS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_secs).unwrap_or_else(|| Duration::from_secs(5)),

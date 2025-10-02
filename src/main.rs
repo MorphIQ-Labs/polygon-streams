@@ -153,6 +153,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else if sink_kind == "zmq" {
         let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.zmq_channel_cap);
+        let (init_tx, init_rx) = tokio::sync::oneshot::channel();
         let _handle = sink_zmq::spawn_zmq_publisher(
             rx_ev,
             cfg.zmq_endpoint.clone(),
@@ -162,7 +163,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cfg.zmq_warn_interval,
             metrics.clone(),
             notify_shutdown.clone(),
+            Some(init_tx),
         );
+        match timeout(Duration::from_secs(2), init_rx).await {
+            Ok(Ok(true)) => { /* ok */ }
+            Ok(Ok(false)) => { warn!(target: "polygon_sink", "zmq_init_failed"); }
+            Ok(Err(_)) => { warn!(target: "polygon_sink", "zmq_init_channel_closed"); }
+            Err(_) => { warn!(target: "polygon_sink", "zmq_init_timeout"); }
+        }
         (Some(tx_ev), None, None)
     } else {
         (None, None, None)
@@ -383,6 +391,19 @@ struct NdjsonBp {
     is_zmq_sink: bool,
 }
 
+fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
+    if bp.is_zmq_sink { metrics.inc_zmq_drop(); } else { metrics.inc_ndjson_drop(); }
+    bp.dropped_since_warn = bp.dropped_since_warn.saturating_add(1);
+    if bp.last_warn.elapsed() >= bp.warn_interval {
+        if bp.is_zmq_sink {
+            warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "zmq_backpressure");
+        } else {
+            warn!(target: "polygon_ndjson", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "ndjson_backpressure");
+        }
+        bp.dropped_since_warn = 0; bp.last_warn = Instant::now();
+    }
+}
+
 fn spawn_message_processor(
     mut rx: Receiver<Message>,
     notify_shutdown: Arc<Notify>,
@@ -600,18 +621,7 @@ fn process_message(
                 };
                 match tx.try_send(ev_out) {
                     Ok(()) => {}
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        if ndjson_bp.is_zmq_sink { metrics.inc_zmq_drop(); } else { metrics.inc_ndjson_drop(); }
-                        ndjson_bp.dropped_since_warn = ndjson_bp.dropped_since_warn.saturating_add(1);
-                        if ndjson_bp.last_warn.elapsed() >= ndjson_bp.warn_interval {
-                            if ndjson_bp.is_zmq_sink {
-                                warn!(target: "polygon_sink", dropped = ndjson_bp.dropped_since_warn, interval_secs = ndjson_bp.warn_interval.as_secs(), "zmq_backpressure");
-                            } else {
-                                warn!(target: "polygon_ndjson", dropped = ndjson_bp.dropped_since_warn, interval_secs = ndjson_bp.warn_interval.as_secs(), "ndjson_backpressure");
-                            }
-                            ndjson_bp.dropped_since_warn = 0; ndjson_bp.last_warn = Instant::now();
-                        }
-                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => { record_sink_backpressure(&metrics, ndjson_bp); }
                     Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => { metrics.inc_error(); }
                 }
             }
