@@ -391,6 +391,26 @@ struct NdjsonBp {
     is_zmq_sink: bool,
 }
 
+impl NdjsonBp {
+    fn new(
+        warn_interval: Duration,
+        include: Option<Vec<IncludePattern>>,
+        sample_quotes_n: u64,
+        is_zmq_sink: bool,
+    ) -> Self {
+        NdjsonBp {
+            last_warn: Instant::now() - warn_interval,
+            dropped_since_warn: 0,
+            warn_interval,
+            include,
+            sample_quotes_n,
+            quotes_counter: 0,
+            seq_counter: 0,
+            is_zmq_sink,
+        }
+    }
+}
+
 fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
     if bp.is_zmq_sink { metrics.inc_zmq_drop(); } else { metrics.inc_ndjson_drop(); }
     bp.dropped_since_warn = bp.dropped_since_warn.saturating_add(1);
@@ -401,6 +421,30 @@ fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
             warn!(target: "polygon_ndjson", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "ndjson_backpressure");
         }
         bp.dropped_since_warn = 0; bp.last_warn = Instant::now();
+    }
+}
+
+fn make_ndjson_event(
+    typ: &str,
+    symbol: &str,
+    ts: i64,
+    payload: serde_json::Value,
+    metrics: &Metrics,
+    host: &str,
+    seq: u64,
+) -> NdjsonEvent {
+    NdjsonEvent {
+        ingest_ts: now_millis(),
+        r#type: Box::leak(typ.to_string().into_boxed_str()),
+        symbol: symbol.to_string(),
+        topic: metrics.topic().to_string(),
+        feed: metrics.feed().to_string(),
+        ts,
+        payload,
+        hostname: host.to_string(),
+        app_version: env!("CARGO_PKG_VERSION"),
+        schema_version: 1,
+        seq,
     }
 }
 
@@ -419,7 +463,7 @@ fn spawn_message_processor(
     handler: Arc<dyn ClusterHandler>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut ndjson_bp = NdjsonBp { last_warn: Instant::now() - ndjson_warn_interval, dropped_since_warn: 0, warn_interval: ndjson_warn_interval, include: include_patterns, sample_quotes_n, quotes_counter: 0, seq_counter: 0, is_zmq_sink };
+        let mut ndjson_bp = NdjsonBp::new(ndjson_warn_interval, include_patterns, sample_quotes_n, is_zmq_sink);
         loop {
             tokio::select! {
                 maybe = rx.recv() => {
@@ -606,19 +650,15 @@ fn process_message(
                     if !matched { continue; }
                 }
                 ndjson_bp.seq_counter = ndjson_bp.seq_counter.saturating_add(1);
-                let ev_out = NdjsonEvent {
-                    ingest_ts: now_millis(),
-                    r#type: Box::leak(ev.ev.clone().into_boxed_str()),
-                    symbol: ev.symbol.clone().unwrap_or_default(),
-                    topic: metrics.topic().to_string(),
-                    feed: metrics.feed().to_string(),
-                    ts: ev.ts.unwrap_or(0),
-                    payload: ev.payload.clone(),
-                    hostname: (*host).to_string(),
-                    app_version: env!("CARGO_PKG_VERSION"),
-                    schema_version: 1,
-                    seq: ndjson_bp.seq_counter,
-                };
+                let ev_out = make_ndjson_event(
+                    &ev.ev,
+                    &ev.symbol.clone().unwrap_or_default(),
+                    ev.ts.unwrap_or(0),
+                    ev.payload.clone(),
+                    metrics,
+                    host,
+                    ndjson_bp.seq_counter,
+                );
                 match tx.try_send(ev_out) {
                     Ok(()) => {}
                     Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => { record_sink_backpressure(&metrics, ndjson_bp); }

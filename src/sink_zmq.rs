@@ -12,10 +12,29 @@ use {
 };
 
 #[cfg(feature = "zmq-sink")]
-fn make_socket(ctx: &Context, endpoint: &str, bind: bool, snd_hwm: Option<i32>) -> Result<Socket, String> {
-    let sock = ctx.socket(SocketType::PUB).map_err(|e| e.to_string())?;
-    if let Some(hwm) = snd_hwm { sock.set_sndhwm(hwm).map_err(|e| e.to_string())?; }
-    if bind { sock.bind(endpoint).map_err(|e| e.to_string())?; } else { sock.connect(endpoint).map_err(|e| e.to_string())?; }
+fn make_socket(
+    ctx: &Context,
+    endpoint: &str,
+    bind: bool,
+    snd_hwm: Option<i32>,
+) -> Result<Socket, String> {
+    let sock = ctx
+        .socket(SocketType::PUB)
+        .map_err(|e| e.to_string())?;
+
+    if let Some(hwm) = snd_hwm {
+        sock.set_sndhwm(hwm)
+            .map_err(|e| e.to_string())?;
+    }
+
+    if bind {
+        sock.bind(endpoint)
+            .map_err(|e| e.to_string())?;
+    } else {
+        sock.connect(endpoint)
+            .map_err(|e| e.to_string())?;
+    }
+
     Ok(sock)
 }
 
@@ -57,6 +76,8 @@ pub fn spawn_zmq_publisher(
         };
 
         // Main pump loop
+        // Reuse topic buffer to minimize allocations per send
+        let mut topic_buf: Vec<u8> = Vec::with_capacity(64);
         loop {
             tokio::select! {
                 _ = notify_shutdown.notified() => {
@@ -67,11 +88,13 @@ pub fn spawn_zmq_publisher(
                     match maybe {
                         Some(ev) => {
                             // Multipart: [topic, payload]
-                            let topic = if ev.symbol.is_empty() {
-                                format!("{}{}", topic_prefix, ev.r#type)
-                            } else {
-                                format!("{}{}:{}", topic_prefix, ev.r#type, ev.symbol)
-                            };
+                            // Build topic directly as bytes to avoid intermediate String
+                            topic_buf.clear();
+                            let need = topic_prefix.len() + ev.r#type.len() + if ev.symbol.is_empty() { 0 } else { 1 + ev.symbol.len() };
+                            if topic_buf.capacity() < need { topic_buf.reserve(need - topic_buf.capacity()); }
+                            topic_buf.extend_from_slice(topic_prefix.as_bytes());
+                            topic_buf.extend_from_slice(ev.r#type.as_bytes());
+                            if !ev.symbol.is_empty() { topic_buf.push(b':'); topic_buf.extend_from_slice(ev.symbol.as_bytes()); }
                             let payload = match to_vec(&ev) {
                                 Ok(mut v) => { v.push(b'\n'); v },
                                 Err(e) => {
@@ -81,7 +104,7 @@ pub fn spawn_zmq_publisher(
                                 }
                             };
                             // Non-blocking send; drop on EAGAIN
-                            match socket.send_multipart(&[topic.as_bytes(), &payload], DONTWAIT) {
+                            match socket.send_multipart(&[topic_buf.as_slice(), &payload], DONTWAIT) {
                                 Ok(()) => { metrics.inc_zmq_sent(); }
                                 Err(e) => {
                                     // Drop on backpressure (EAGAIN)
