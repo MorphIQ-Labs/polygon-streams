@@ -30,6 +30,10 @@ pub struct NdjsonEvent {
     pub seq: u64,
 }
 
+/// Interns common event types to avoid allocations.
+///
+/// Returns a borrowed static string for common types (T, Q, A, AM, status)
+/// and an owned string for any other event types.
 pub fn intern_event_type(typ: &str) -> Cow<'static, str> {
     match typ {
         "T" => Cow::Borrowed("T"),
