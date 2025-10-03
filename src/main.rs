@@ -256,19 +256,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ndjson_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_trades_tx_opt.as_ref().map(|tx| tx.clone()),
         ndjson_quotes_tx_opt.as_ref().map(|tx| tx.clone()),
-        if sink_kind == "zmq" {
-            cfg.zmq_warn_interval
-        } else if sink_kind == "nng" {
-            cfg.nng_warn_interval
-        } else {
-            cfg.ndjson_warn_interval
+        match sink_kind.as_str() {
+            #[cfg(feature = "zmq-sink")]
+            "zmq" => cfg.zmq_warn_interval,
+            #[cfg(feature = "nng-sink")]
+            "nng" => cfg.nng_warn_interval,
+            _ => cfg.ndjson_warn_interval,
         },
-        if sink_kind == "zmq" {
-            SinkType::Zmq
-        } else if sink_kind == "nng" {
-            SinkType::Nng
-        } else {
-            SinkType::Ndjson
+        match sink_kind.as_str() {
+            #[cfg(feature = "zmq-sink")]
+            "zmq" => SinkType::Zmq,
+            #[cfg(feature = "nng-sink")]
+            "nng" => SinkType::Nng,
+            _ => SinkType::Ndjson,
         },
         include_patterns,
         cfg.ndjson_sample_quotes.max(1),
@@ -497,7 +497,9 @@ where
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SinkType {
     Ndjson,
+    #[cfg(feature = "zmq-sink")]
     Zmq,
+    #[cfg(feature = "nng-sink")]
     Nng,
 }
 
@@ -534,16 +536,20 @@ impl NdjsonBp {
 
 fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
     match bp.sink_type {
+        #[cfg(feature = "zmq-sink")]
         SinkType::Zmq => metrics.inc_zmq_drop(),
+        #[cfg(feature = "nng-sink")]
         SinkType::Nng => metrics.inc_nng_drop(),
         SinkType::Ndjson => metrics.inc_ndjson_drop(),
     }
     bp.dropped_since_warn = bp.dropped_since_warn.saturating_add(1);
     if bp.last_warn.elapsed() >= bp.warn_interval {
         match bp.sink_type {
+            #[cfg(feature = "zmq-sink")]
             SinkType::Zmq => {
                 warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "zmq_backpressure");
             }
+            #[cfg(feature = "nng-sink")]
             SinkType::Nng => {
                 warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "nng_backpressure");
             }

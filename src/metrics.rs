@@ -22,9 +22,13 @@ pub struct Metrics {
     ndjson_drops_total: Arc<AtomicU64>,
     ndjson_written_total: Arc<AtomicU64>,
     channel_drops_total: Arc<AtomicU64>,
+    #[cfg(feature = "zmq-sink")]
     zmq_drops_total: Arc<AtomicU64>,
+    #[cfg(feature = "zmq-sink")]
     zmq_sent_total: Arc<AtomicU64>,
+    #[cfg(feature = "nng-sink")]
     nng_drops_total: Arc<AtomicU64>,
+    #[cfg(feature = "nng-sink")]
     nng_sent_total: Arc<AtomicU64>,
     ready: Arc<AtomicBool>,
     feed: String,
@@ -54,9 +58,13 @@ impl Metrics {
             ndjson_drops_total: Arc::new(AtomicU64::new(0)),
             ndjson_written_total: Arc::new(AtomicU64::new(0)),
             channel_drops_total: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "zmq-sink")]
             zmq_drops_total: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "zmq-sink")]
             zmq_sent_total: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "nng-sink")]
             nng_drops_total: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "nng-sink")]
             nng_sent_total: Arc::new(AtomicU64::new(0)),
             ready: Arc::new(AtomicBool::new(false)),
             feed,
@@ -105,15 +113,19 @@ impl Metrics {
     pub fn inc_ndjson_written(&self) {
         self.ndjson_written_total.fetch_add(1, Ordering::Relaxed);
     }
+    #[cfg(feature = "zmq-sink")]
     pub fn inc_zmq_drop(&self) {
         self.zmq_drops_total.fetch_add(1, Ordering::Relaxed);
     }
+    #[cfg(feature = "zmq-sink")]
     pub fn inc_zmq_sent(&self) {
         self.zmq_sent_total.fetch_add(1, Ordering::Relaxed);
     }
+    #[cfg(feature = "nng-sink")]
     pub fn inc_nng_drop(&self) {
         self.nng_drops_total.fetch_add(1, Ordering::Relaxed);
     }
+    #[cfg(feature = "nng-sink")]
     pub fn inc_nng_sent(&self) {
         self.nng_sent_total.fetch_add(1, Ordering::Relaxed);
     }
@@ -289,53 +301,59 @@ impl Metrics {
             self.ndjson_written_total.load(Ordering::Relaxed)
         );
 
-        let _ = writeln!(
-            &mut s,
-            "# HELP polygon_zmq_drops_total ZMQ send drops due to backpressure"
-        );
-        let _ = writeln!(&mut s, "# TYPE polygon_zmq_drops_total counter");
-        let _ = writeln!(
-            &mut s,
-            "polygon_zmq_drops_total{{{}}} {}",
-            labels,
-            self.zmq_drops_total.load(Ordering::Relaxed)
-        );
+        #[cfg(feature = "zmq-sink")]
+        {
+            let _ = writeln!(
+                &mut s,
+                "# HELP polygon_zmq_drops_total ZMQ send drops due to backpressure"
+            );
+            let _ = writeln!(&mut s, "# TYPE polygon_zmq_drops_total counter");
+            let _ = writeln!(
+                &mut s,
+                "polygon_zmq_drops_total{{{}}} {}",
+                labels,
+                self.zmq_drops_total.load(Ordering::Relaxed)
+            );
 
-        let _ = writeln!(
-            &mut s,
-            "# HELP polygon_zmq_sent_total ZMQ messages sent successfully"
-        );
-        let _ = writeln!(&mut s, "# TYPE polygon_zmq_sent_total counter");
-        let _ = writeln!(
-            &mut s,
-            "polygon_zmq_sent_total{{{}}} {}",
-            labels,
-            self.zmq_sent_total.load(Ordering::Relaxed)
-        );
+            let _ = writeln!(
+                &mut s,
+                "# HELP polygon_zmq_sent_total ZMQ messages sent successfully"
+            );
+            let _ = writeln!(&mut s, "# TYPE polygon_zmq_sent_total counter");
+            let _ = writeln!(
+                &mut s,
+                "polygon_zmq_sent_total{{{}}} {}",
+                labels,
+                self.zmq_sent_total.load(Ordering::Relaxed)
+            );
+        }
 
-        let _ = writeln!(
-            &mut s,
-            "# HELP polygon_nng_drops_total NNG send drops due to backpressure"
-        );
-        let _ = writeln!(&mut s, "# TYPE polygon_nng_drops_total counter");
-        let _ = writeln!(
-            &mut s,
-            "polygon_nng_drops_total{{{}}} {}",
-            labels,
-            self.nng_drops_total.load(Ordering::Relaxed)
-        );
+        #[cfg(feature = "nng-sink")]
+        {
+            let _ = writeln!(
+                &mut s,
+                "# HELP polygon_nng_drops_total NNG send drops due to backpressure"
+            );
+            let _ = writeln!(&mut s, "# TYPE polygon_nng_drops_total counter");
+            let _ = writeln!(
+                &mut s,
+                "polygon_nng_drops_total{{{}}} {}",
+                labels,
+                self.nng_drops_total.load(Ordering::Relaxed)
+            );
 
-        let _ = writeln!(
-            &mut s,
-            "# HELP polygon_nng_sent_total NNG messages sent successfully"
-        );
-        let _ = writeln!(&mut s, "# TYPE polygon_nng_sent_total counter");
-        let _ = writeln!(
-            &mut s,
-            "polygon_nng_sent_total{{{}}} {}",
-            labels,
-            self.nng_sent_total.load(Ordering::Relaxed)
-        );
+            let _ = writeln!(
+                &mut s,
+                "# HELP polygon_nng_sent_total NNG messages sent successfully"
+            );
+            let _ = writeln!(&mut s, "# TYPE polygon_nng_sent_total counter");
+            let _ = writeln!(
+                &mut s,
+                "polygon_nng_sent_total{{{}}} {}",
+                labels,
+                self.nng_sent_total.load(Ordering::Relaxed)
+            );
+        }
 
         // Histograms
         self.reconnect_hist_success
