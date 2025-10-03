@@ -37,6 +37,14 @@ pub struct Config {
     pub zmq_warn_interval: Duration,
     pub zmq_snd_hwm: Option<i32>,
     pub zmq_topic_prefix: String,
+
+    // NNG sink configuration
+    pub nng_endpoint: String,
+    pub nng_bind: bool,
+    pub nng_channel_cap: usize,
+    pub nng_warn_interval: Duration,
+    pub nng_snd_buf_size: Option<usize>,
+    pub nng_topic_prefix: String,
 }
 
 impl Config {
@@ -193,6 +201,24 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<i32>().ok()),
             zmq_topic_prefix: env::var("ZMQ_TOPIC_PREFIX").unwrap_or_else(|_| "".to_string()),
+
+            // NNG sink
+            nng_endpoint: env::var("NNG_ENDPOINT")
+                .unwrap_or_else(|_| "tcp://127.0.0.1:5557".to_string()),
+            nng_bind: parse_bool(env::var("NNG_BIND").ok().as_deref()),
+            nng_channel_cap: env::var("NNG_CHANNEL_CAP")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(4096),
+            nng_warn_interval: env::var("NNG_WARN_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or_else(|| Duration::from_secs(5)),
+            nng_snd_buf_size: env::var("NNG_SND_BUF_SIZE")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok()),
+            nng_topic_prefix: env::var("NNG_TOPIC_PREFIX").unwrap_or_else(|_| "".to_string()),
         })
     }
 }

@@ -60,3 +60,16 @@ jobs:
             ghcr.io/${{ github.repository }}:latest-zmq
           labels: ${{ steps.meta.outputs.labels }}
 
+      - name: Build and push (nng)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            ENABLE_NNG_SINK=1
+          tags: |
+            ghcr.io/${{ github.repository }}:nng
+            ghcr.io/${{ github.repository }}:latest-nng
+          labels: ${{ steps.meta.outputs.labels }}
+

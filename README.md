@@ -17,7 +17,7 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
 | `METRICS_ADDR` | `127.0.0.1:9898` | Exposes `/metrics`, `/health`, `/ready` |
 | `STATS_INTERVAL_SECS` | `60` | Periodic stats log interval |
 | `BP_WARN_INTERVAL_SECS` | `5` | Backpressure warning interval |
-| `SINK` | `stdout` | One of: `stdout`, `ndjson`, `zmq` |
+| `SINK` | `stdout` | One of: `stdout`, `ndjson`, `zmq`, `nng` |
 | `NDJSON_DEST` | `stdout` | `stdout` or file path |
 | `NDJSON_CHANNEL_CAP` | `2048` | NDJSON pipeline channel capacity |
 | `NDJSON_WARN_INTERVAL_SECS` | `5` | NDJSON backpressure warn interval |
@@ -36,6 +36,12 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
 | `ZMQ_WARN_INTERVAL_SECS` | `5` | Backpressure warn interval for ZMQ |
 | `ZMQ_SND_HWM` | unset | Optional zmq `SNDHWM` (messages) |
 | `ZMQ_TOPIC_PREFIX` | empty | Optional topic prefix for PUB topic |
+| `NNG_ENDPOINT` | `tcp://127.0.0.1:5557` | NNG PUB endpoint (connect or bind) |
+| `NNG_BIND` | `false` | When `true`, bind instead of connect |
+| `NNG_CHANNEL_CAP` | `4096` | Internal channel capacity for NNG sink |
+| `NNG_WARN_INTERVAL_SECS` | `5` | Backpressure warn interval for NNG |
+| `NNG_SND_BUF_SIZE` | unset | Optional send buffer size (bytes) |
+| `NNG_TOPIC_PREFIX` | empty | Optional topic prefix for PUB topic |
 | `READY_MIN_MESSAGES` | `1` | Messages required before `/ready` returns READY |
 | `READY_DELAY_MS` | `0` | Additional delay before READY (milliseconds) |
 
@@ -63,11 +69,21 @@ High‑performance streamer for Polygon.io clusters (stocks, futures, options, c
    git clone [repository-url]
    cd polygon-streams
    cargo build --release
+
    # ZMQ sink requires libzmq and feature flag:
    # macOS (brew):   brew install zeromq
    # Debian/Ubuntu:  sudo apt-get install -y libzmq3-dev
    # RHEL/CentOS:    sudo yum install -y zeromq-devel
    # Then build with: cargo build --release --features zmq-sink
+
+   # NNG sink requires libnng and feature flag:
+   # macOS (brew):   brew install nng
+   # Debian/Ubuntu:  sudo apt-get install -y libnng-dev
+   # RHEL/CentOS:    sudo yum install -y nng-devel
+   # Then build with: cargo build --release --features nng-sink
+
+   # Or build with both ZMQ and NNG:
+   # cargo build --release --features zmq-sink,nng-sink
    ```
 
 ## Configuration
@@ -130,6 +146,11 @@ Examples
   - Subscriber examples:
     - Rust: `cargo run --release --features zmq-sink --example zmq_sub`
     - Python: `pip install pyzmq && ZMQ_SUB_ENDPOINT=tcp://127.0.0.1:5556 python3 examples/zmq_sub.py`
+- NNG PUB sink (requires feature build):
+  - `cargo run --release --features nng-sink` with `SINK=nng NNG_ENDPOINT=tcp://127.0.0.1:5557`
+  - Subscriber examples:
+    - Rust: `cargo run --release --features nng-sink --example nng_sub`
+    - Python: `pip install pynng && NNG_SUB_ENDPOINT=tcp://127.0.0.1:5557 python3 examples/nng_sub.py`
 
 ## Output Format
 
@@ -171,12 +192,30 @@ ZMQ PUB sink
   - `payload` = NDJSON event (same schema as file/stdout)
  - Monitor metrics: `polygon_zmq_sent_total` (sent) and `polygon_zmq_drops_total` (dropped due to backpressure).
 
+NNG PUB sink
+- Build with feature: `cargo run --release --features nng-sink`
+- Configure:
+  - `SINK=nng`
+  - `NNG_ENDPOINT=tcp://127.0.0.1:5557` and optionally `NNG_BIND=true`
+  - Optional `NNG_SND_BUF_SIZE` to set send buffer size and `NNG_TOPIC_PREFIX` to prefix topics.
+- Messages are sent as a single frame with format: `{topic} {payload}\n` where:
+  - `topic` = `"T:SYMBOL"` or `"Q:SYMBOL"` (with optional `NNG_TOPIC_PREFIX`)
+  - `payload` = NDJSON event (same schema as file/stdout)
+- Monitor metrics: `polygon_nng_sent_total` (sent) and `polygon_nng_drops_total` (dropped due to backpressure).
+
 Docker with ZMQ feature
 - Build with ZeroMQ enabled: `docker build --build-arg ENABLE_ZMQ_SINK=1 -t polygon-rs:zmq .`
  - Image tags when using GHCR CI:
    - Default: `ghcr.io/OWNER/REPO:latest`
    - ZMQ-enabled: `ghcr.io/OWNER/REPO:zmq` and `ghcr.io/OWNER/REPO:latest-zmq`
  - Local convenience tag added: `polygon-rs:latest-zmq`
+
+Docker with NNG feature
+- Build with NNG enabled: `docker build --build-arg ENABLE_NNG_SINK=1 -t polygon-rs:nng .`
+ - Image tags when using GHCR CI:
+   - Default: `ghcr.io/OWNER/REPO:latest`
+   - NNG-enabled: `ghcr.io/OWNER/REPO:nng` and `ghcr.io/OWNER/REPO:latest-nng`
+ - Local convenience tag added: `polygon-rs:latest-nng`
 
 ## Effective Config
 
@@ -198,13 +237,14 @@ RUST_LOG=warn,polygon_config=info cargo run --release
   - Tune `HEARTBEAT_INTERVAL_SECS` if needed.
 - Readiness never READY
   - Ensure messages are flowing (topic matches cluster). Adjust `READY_MIN_MESSAGES` / `READY_DELAY_MS`.
-- Backpressure drops (processing / NDJSON / ZMQ)
-  - Increase capacities: `CHANNEL_CAP`, `NDJSON_CHANNEL_CAP`, or `ZMQ_CHANNEL_CAP` (for ZMQ sink).
+- Backpressure drops (processing / NDJSON / ZMQ / NNG)
+  - Increase capacities: `CHANNEL_CAP`, `NDJSON_CHANNEL_CAP`, `ZMQ_CHANNEL_CAP`, or `NNG_CHANNEL_CAP`.
   - For NDJSON, enable rotation (`NDJSON_MAX_BYTES`) and consider `NDJSON_INCLUDE` / `NDJSON_SAMPLE_QUOTES` to reduce volume.
   - Metrics to watch:
     - Processing drops: `polygon_channel_drops_total`
     - NDJSON: `polygon_ndjson_drops_total`, `polygon_ndjson_written_total`
     - ZMQ: `polygon_zmq_drops_total`, `polygon_zmq_sent_total`
+    - NNG: `polygon_nng_drops_total`, `polygon_nng_sent_total`
 
 ## Error Handling
 
@@ -220,7 +260,7 @@ RUST_LOG=warn,polygon_config=info cargo run --release
     `polygon_read_timeouts_total`, `polygon_heartbeats_sent_total`, `polygon_messages_received_total`,
     `polygon_trades_total`, `polygon_quotes_total`, `polygon_errors_total`
   - Backpressure + sinks: `polygon_channel_drops_total`, `polygon_ndjson_drops_total`, `polygon_ndjson_written_total`,
-    `polygon_zmq_drops_total`, `polygon_zmq_sent_total`
+    `polygon_zmq_drops_total`, `polygon_zmq_sent_total`, `polygon_nng_drops_total`, `polygon_nng_sent_total`
 
 ## Contributing
 

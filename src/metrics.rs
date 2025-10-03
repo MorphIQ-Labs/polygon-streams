@@ -24,6 +24,8 @@ pub struct Metrics {
     channel_drops_total: Arc<AtomicU64>,
     zmq_drops_total: Arc<AtomicU64>,
     zmq_sent_total: Arc<AtomicU64>,
+    nng_drops_total: Arc<AtomicU64>,
+    nng_sent_total: Arc<AtomicU64>,
     ready: Arc<AtomicBool>,
     feed: String,
     topic: String,
@@ -54,6 +56,8 @@ impl Metrics {
             channel_drops_total: Arc::new(AtomicU64::new(0)),
             zmq_drops_total: Arc::new(AtomicU64::new(0)),
             zmq_sent_total: Arc::new(AtomicU64::new(0)),
+            nng_drops_total: Arc::new(AtomicU64::new(0)),
+            nng_sent_total: Arc::new(AtomicU64::new(0)),
             ready: Arc::new(AtomicBool::new(false)),
             feed,
             topic,
@@ -106,6 +110,12 @@ impl Metrics {
     }
     pub fn inc_zmq_sent(&self) {
         self.zmq_sent_total.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_nng_drop(&self) {
+        self.nng_drops_total.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn inc_nng_sent(&self) {
+        self.nng_sent_total.fetch_add(1, Ordering::Relaxed);
     }
     pub fn set_ready(&self, v: bool) {
         self.ready.store(v, Ordering::Relaxed);
@@ -301,6 +311,30 @@ impl Metrics {
             "polygon_zmq_sent_total{{{}}} {}",
             labels,
             self.zmq_sent_total.load(Ordering::Relaxed)
+        );
+
+        let _ = writeln!(
+            &mut s,
+            "# HELP polygon_nng_drops_total NNG send drops due to backpressure"
+        );
+        let _ = writeln!(&mut s, "# TYPE polygon_nng_drops_total counter");
+        let _ = writeln!(
+            &mut s,
+            "polygon_nng_drops_total{{{}}} {}",
+            labels,
+            self.nng_drops_total.load(Ordering::Relaxed)
+        );
+
+        let _ = writeln!(
+            &mut s,
+            "# HELP polygon_nng_sent_total NNG messages sent successfully"
+        );
+        let _ = writeln!(&mut s, "# TYPE polygon_nng_sent_total counter");
+        let _ = writeln!(
+            &mut s,
+            "polygon_nng_sent_total{{{}}} {}",
+            labels,
+            self.nng_sent_total.load(Ordering::Relaxed)
         );
 
         // Histograms

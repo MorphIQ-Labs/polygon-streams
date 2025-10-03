@@ -27,6 +27,7 @@ mod metrics;
 mod model;
 mod ndjson;
 mod sink_zmq;
+mod sink_nng;
 
 // env-only helpers are defined in config.rs
 
@@ -211,6 +212,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             (Some(tx_ev), None, None)
+        } else if sink_kind == "nng" {
+            let (tx_ev, rx_ev) = mpsc::channel::<NdjsonEvent>(cfg.nng_channel_cap);
+            let (init_tx, init_rx) = tokio::sync::oneshot::channel();
+            let _handle = sink_nng::spawn_nng_publisher(
+                rx_ev,
+                cfg.nng_endpoint.clone(),
+                cfg.nng_bind,
+                cfg.nng_snd_buf_size,
+                cfg.nng_topic_prefix.clone(),
+                cfg.nng_warn_interval,
+                metrics.clone(),
+                notify_shutdown.clone(),
+                Some(init_tx),
+            );
+            match timeout(Duration::from_secs(2), init_rx).await {
+                Ok(Ok(true)) => { /* ok */ }
+                Ok(Ok(false)) => {
+                    warn!(target: "polygon_sink", "nng_init_failed");
+                }
+                Ok(Err(_)) => {
+                    warn!(target: "polygon_sink", "nng_init_channel_closed");
+                }
+                Err(_) => {
+                    warn!(target: "polygon_sink", "nng_init_timeout");
+                }
+            }
+            (Some(tx_ev), None, None)
         } else {
             (None, None, None)
         };
@@ -230,10 +258,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ndjson_quotes_tx_opt.as_ref().map(|tx| tx.clone()),
         if sink_kind == "zmq" {
             cfg.zmq_warn_interval
+        } else if sink_kind == "nng" {
+            cfg.nng_warn_interval
         } else {
             cfg.ndjson_warn_interval
         },
-        sink_kind == "zmq",
+        if sink_kind == "zmq" {
+            SinkType::Zmq
+        } else if sink_kind == "nng" {
+            SinkType::Nng
+        } else {
+            SinkType::Ndjson
+        },
         include_patterns,
         cfg.ndjson_sample_quotes.max(1),
         host.clone(),
@@ -458,6 +494,13 @@ where
     Ok(socket)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SinkType {
+    Ndjson,
+    Zmq,
+    Nng,
+}
+
 struct NdjsonBp {
     last_warn: Instant,
     dropped_since_warn: u64,
@@ -466,7 +509,7 @@ struct NdjsonBp {
     sample_quotes_n: u64,
     quotes_counter: u64,
     seq_counter: u64,
-    is_zmq_sink: bool,
+    sink_type: SinkType,
 }
 
 impl NdjsonBp {
@@ -474,7 +517,7 @@ impl NdjsonBp {
         warn_interval: Duration,
         include: Option<Vec<IncludePattern>>,
         sample_quotes_n: u64,
-        is_zmq_sink: bool,
+        sink_type: SinkType,
     ) -> Self {
         NdjsonBp {
             last_warn: Instant::now() - warn_interval,
@@ -484,23 +527,29 @@ impl NdjsonBp {
             sample_quotes_n,
             quotes_counter: 0,
             seq_counter: 0,
-            is_zmq_sink,
+            sink_type,
         }
     }
 }
 
 fn record_sink_backpressure(metrics: &Metrics, bp: &mut NdjsonBp) {
-    if bp.is_zmq_sink {
-        metrics.inc_zmq_drop();
-    } else {
-        metrics.inc_ndjson_drop();
+    match bp.sink_type {
+        SinkType::Zmq => metrics.inc_zmq_drop(),
+        SinkType::Nng => metrics.inc_nng_drop(),
+        SinkType::Ndjson => metrics.inc_ndjson_drop(),
     }
     bp.dropped_since_warn = bp.dropped_since_warn.saturating_add(1);
     if bp.last_warn.elapsed() >= bp.warn_interval {
-        if bp.is_zmq_sink {
-            warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "zmq_backpressure");
-        } else {
-            warn!(target: "polygon_ndjson", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "ndjson_backpressure");
+        match bp.sink_type {
+            SinkType::Zmq => {
+                warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "zmq_backpressure");
+            }
+            SinkType::Nng => {
+                warn!(target: "polygon_sink", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "nng_backpressure");
+            }
+            SinkType::Ndjson => {
+                warn!(target: "polygon_ndjson", dropped = bp.dropped_since_warn, interval_secs = bp.warn_interval.as_secs(), "ndjson_backpressure");
+            }
         }
         bp.dropped_since_warn = 0;
         bp.last_warn = Instant::now();
@@ -539,7 +588,7 @@ fn spawn_message_processor(
     ndjson_trades_tx: Option<Sender<NdjsonEvent>>,
     ndjson_quotes_tx: Option<Sender<NdjsonEvent>>,
     ndjson_warn_interval: Duration,
-    is_zmq_sink: bool,
+    sink_type: SinkType,
     include_patterns: Option<Vec<IncludePattern>>,
     sample_quotes_n: u64,
     host: Arc<String>,
@@ -550,7 +599,7 @@ fn spawn_message_processor(
             ndjson_warn_interval,
             include_patterns,
             sample_quotes_n,
-            is_zmq_sink,
+            sink_type,
         );
         loop {
             tokio::select! {

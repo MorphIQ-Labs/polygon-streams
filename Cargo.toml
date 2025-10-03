@@ -22,7 +22,13 @@ smallvec = "1.15"
 default = []
 # Enable ZeroMQ sink support (requires libzmq on the system)
 zmq-sink = ["zmq"]
+# Enable NNG sink support (requires libnng on the system)
+nng-sink = ["nng"]
 
 [dependencies.zmq]
 version = "0.10"
+optional = true
+
+[dependencies.nng]
+version = "1.0"
 optional = true
