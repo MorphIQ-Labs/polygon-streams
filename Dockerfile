@@ -12,8 +12,9 @@ ENV CARGO_PROFILE_RELEASE_LTO=true \
 ARG ENABLE_ZMQ_SINK=0
 ARG ENABLE_NNG_SINK=0
 RUN apt-get update && \
-    if [ "$ENABLE_ZMQ_SINK" = "1" ]; then apt-get install -y --no-install-recommends libzmq3-dev cmake; fi && \
-    if [ "$ENABLE_NNG_SINK" = "1" ]; then apt-get install -y --no-install-recommends libnng-dev cmake; fi && \
+    if [ "$ENABLE_ZMQ_SINK" = "1" ] || [ "$ENABLE_NNG_SINK" = "1" ]; then apt-get install -y --no-install-recommends cmake; fi && \
+    if [ "$ENABLE_ZMQ_SINK" = "1" ]; then apt-get install -y --no-install-recommends libzmq3-dev; fi && \
+    if [ "$ENABLE_NNG_SINK" = "1" ]; then apt-get install -y --no-install-recommends libnng-dev; fi && \
     rm -rf /var/lib/apt/lists/* && \
     FEATURES=""; \
     if [ "$ENABLE_ZMQ_SINK" = "1" ] && [ "$ENABLE_NNG_SINK" = "1" ]; then \
