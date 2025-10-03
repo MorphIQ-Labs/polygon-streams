@@ -494,6 +494,7 @@ where
     Ok(socket)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum SinkType {
     Ndjson,
     Zmq,

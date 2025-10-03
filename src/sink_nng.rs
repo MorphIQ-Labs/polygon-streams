@@ -9,7 +9,7 @@ use {
     tokio::sync::mpsc::Receiver,
     tokio::sync::{oneshot, Notify},
     tracing::{error, info, warn},
-    nng::{Socket, Protocol},
+    nng::{Socket, Protocol, options::Options},
 };
 
 #[cfg(feature = "nng-sink")]
@@ -21,7 +21,7 @@ fn make_socket(
     let sock = Socket::new(Protocol::Pub0).map_err(|e| e.to_string())?;
 
     if let Some(buf_size) = snd_buf_size {
-        sock.set_opt::<nng::options::SendBufferSize>(buf_size)
+        sock.set_opt::<nng::options::SendBufferSize>(buf_size as i32)
             .map_err(|e| e.to_string())?;
     }
 
@@ -126,11 +126,12 @@ pub fn spawn_nng_publisher(
                             msg_buf.push(b'\n');
 
                             // Non-blocking send; drop on would-block
-                            match socket.send(&msg_buf) {
+                            let msg = nng::Message::from(&msg_buf[..]);
+                            match socket.send(msg) {
                                 Ok(()) => {
                                     metrics.inc_nng_sent();
                                 }
-                                Err(nng::Error::TryAgain) => {
+                                Err((_, nng::Error::TryAgain)) => {
                                     // Drop on backpressure (would block)
                                     drops_since_warn = drops_since_warn.saturating_add(1);
                                     metrics.inc_nng_drop();
@@ -140,7 +141,7 @@ pub fn spawn_nng_publisher(
                                         last_warn = Instant::now();
                                     }
                                 }
-                                Err(e) => {
+                                Err((_, e)) => {
                                     error!(target: "polygon_sink", error = %e, "nng_send_error");
                                 }
                             }
