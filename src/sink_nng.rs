@@ -21,7 +21,7 @@ fn make_socket(
     let sock = Socket::new(Protocol::Pub0).map_err(|e| e.to_string())?;
 
     if let Some(buf_size) = snd_buf_size {
-        // Convert to i32 as required by NNG API, clamping values above i32::MAX
+        // Clamp to i32::MAX to prevent overflow (NNG API requires i32)
         // Values larger than 2GB are unrealistic for send buffers anyway
         let size = buf_size.min(i32::MAX as usize) as i32;
         sock.set_opt::<nng::options::SendBufferSize>(size)
