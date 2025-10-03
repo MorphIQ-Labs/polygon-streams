@@ -21,7 +21,8 @@ fn make_socket(
     let sock = Socket::new(Protocol::Pub0).map_err(|e| e.to_string())?;
 
     if let Some(buf_size) = snd_buf_size {
-        sock.set_opt::<nng::options::SendBufferSize>(buf_size as i32)
+        let size = buf_size.min(i32::MAX as usize) as i32;
+        sock.set_opt::<nng::options::SendBufferSize>(size)
             .map_err(|e| e.to_string())?;
     }
 
