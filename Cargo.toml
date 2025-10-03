@@ -1,10 +1,14 @@
 [package]
 name = "polygon-rs"
-version = "1.0.1"
+version = "1.0.0"
 authors = ["Stephen Romano <thestephenromano@gmail.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+edition = "2021"
+rust-version = "1.70"
+license = "GPL-3.0-or-later"
+description = "High-performance WebSocket streamer for Polygon.io market data with multiple sink options"
+repository = "https://github.com/MorphIQ-Labs/polygon-streams"
+keywords = ["polygon", "websocket", "market-data", "streaming", "finance"]
+categories = ["network-programming", "asynchronous"]
 
 [dependencies]
 tokio = { version = "1.47", features = ["full"] }
@@ -17,6 +21,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 flate2 = "1.0"
 hostname = "0.4"
 smallvec = "1.15"
+zmq = { version = "0.10", optional = true }
+nng = { version = "1.0", optional = true }
 
 [features]
 default = []
@@ -24,11 +30,3 @@ default = []
 zmq-sink = ["zmq"]
 # Enable NNG sink support (requires libnng on the system)
 nng-sink = ["nng"]
-
-[dependencies.zmq]
-version = "0.10"
-optional = true
-
-[dependencies.nng]
-version = "1.0"
-optional = true
