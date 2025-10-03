@@ -125,7 +125,7 @@ pub fn spawn_nng_publisher(
                             msg_buf.push(b'\n');
 
                             // Non-blocking send; drop on would-block
-                            let msg = nng::Message::from(msg_buf);
+                            let msg = nng::Message::from(&msg_buf[..]);
                             match socket.send(msg) {
                                 Ok(()) => {
                                     metrics.inc_nng_sent();
