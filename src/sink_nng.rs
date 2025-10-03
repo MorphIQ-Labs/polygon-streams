@@ -98,9 +98,7 @@ pub fn spawn_nng_publisher(
                                 1 + ev.symbol.len() // ':' separator + symbol
                             };
                             let need = topic_prefix.len() + ev.r#type.len() + symbol_overhead + 1; // +1 for space separator
-                            if topic_buf.capacity() < need {
-                                topic_buf.reserve(need - topic_buf.capacity());
-                            }
+                            topic_buf.reserve(need);
                             topic_buf.extend_from_slice(topic_prefix.as_bytes());
                             topic_buf.extend_from_slice(ev.r#type.as_bytes());
                             if !ev.symbol.is_empty() {
