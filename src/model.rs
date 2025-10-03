@@ -48,8 +48,6 @@ pub struct FuturesTradeMessage {
     pub(crate) price: f64,
     #[serde(rename = "s")]
     pub(crate) size: i32,
-    #[serde(rename = "c")]
-    pub(crate) trade_conditions: Option<Vec<i16>>,
     #[serde(rename = "t")]
     pub(crate) timestamp: i64,
 }
@@ -322,7 +320,6 @@ mod tests {
                 "sym": "ESZ4",
                 "p": 4935.25,
                 "s": 3,
-                "c": [0, 12],
                 "t": 1730836779020
             }
         ]
@@ -336,7 +333,6 @@ mod tests {
                 assert_eq!(trade.symbol, "ESZ4");
                 assert_eq!(trade.price, 4935.25);
                 assert_eq!(trade.size, 3);
-                assert_eq!(trade.trade_conditions.as_ref().unwrap(), &vec![0, 12]);
                 assert_eq!(trade.timestamp, 1730836779020);
             }
             _ => panic!("Expected a FuturesTradeMessage"),
